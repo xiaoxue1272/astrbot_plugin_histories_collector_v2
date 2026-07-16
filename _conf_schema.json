@@ -1,0 +1,89 @@
+{
+  "group_filter": {
+    "description": "群组过滤配置",
+    "type": "object",
+    "items": {
+      "mode": {
+        "description": "过滤模式",
+        "type": "string",
+        "hint": "whitelist: 仅收集列表中群组; blacklist: 排除列表中群组;",
+        "options": ["whitelist", "blacklist"],
+        "default": "whitelist"
+      },
+      "platforms": {
+        "description": "各平台群组列表",
+        "type": "template_list",
+        "hint": "按平台配置需要收集/排除的群组 ID 列表",
+        "templates": {
+          "platform_entry": {
+            "name": "平台群组",
+            "display_item": "platform",
+            "items": {
+              "platform": {
+                "description": "平台名",
+                "type": "string",
+                "options": ["aiocqhttp", "telegram", "discord", "lark", "wecom", "dingtalk", "slack", "kook"],
+                "default": "aiocqhttp"
+              },
+              "group_ids": {
+                "description": "群组 ID 列表",
+                "type": "list",
+                "hint": "填写需要收集/排除的群组 ID",
+                "default": []
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "max_file_size_mb": {
+    "description": "最大文件大小(MB)",
+    "type": "int",
+    "hint": "超过此大小的图片/文件/视频将跳过下载，仅记录元数据",
+    "default": 50
+  },
+  "max_nesting_depth": {
+    "description": "合并消息最大嵌套深度",
+    "type": "int",
+    "hint": "Node/Nodes/Forward 类型消息的最大递归解析层数，超过后截断",
+    "default": 3
+  },
+  "es_config": {
+    "description": "Elasticsearch 配置",
+    "type": "object",
+    "items": {
+      "hosts": {
+        "description": "主机(集群)地址",
+        "type": "list",
+        "hint": "ES 主机(集群)的 URL 集合",
+        "obvious_hint": true,
+        "default": [
+          "http://localhost:9200"
+        ]
+      },
+      "user": {
+        "description": "用户名",
+        "type": "string",
+        "default": ""
+      },
+      "password": {
+        "description": "密码",
+        "type": "string",
+        "default": ""
+      },
+      "alias": {
+        "description": "索引别名",
+        "type": "string",
+        "hint": "ES 索引别名前缀，实际索引名为 {alias}-000001。注意：V2 默认有别于 V1，避免影响现有数据。",
+        "default": "message-histories-v2"
+      },
+      "use_ik_analyzer": {
+        "description": "启用 IK 分词器",
+        "type": "bool",
+        "hint": "中文环境建议开启，需要 ES 安装 IK 分词插件；非中文环境可关闭",
+        "default": true
+      }
+    }
+  }
+}
