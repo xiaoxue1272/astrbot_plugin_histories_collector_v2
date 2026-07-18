@@ -1,4 +1,3 @@
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,7 +32,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.utils import is_http_url
 
 
 class EnhancedForward(Forward):
-    """Forward 子类，增加 summary 字段用于 summary 构建。"""
+    """Forward 子类，增加 summary 字段。"""
 
     summary: str | None = None
 
@@ -43,13 +42,32 @@ class EnhancedForward(Forward):
 
 
 class EnhancedNodes(Nodes):
-    """Nodes 子类，增加 summary 字段用于 summary 构建。"""
+    """Nodes 子类，增加 summary 字段。"""
 
     summary: str | None = None
 
     def __init__(self, summary: str | None = None, **kwargs):
         super().__init__(**kwargs)
         self.summary = summary
+
+
+class EnhancedImage(Image):
+    """Image 子类，增加 sub_type 和 summary 字段。
+
+    sub_type 取值:
+        0  - 普通图片
+        1  - 动画表情/GIF
+        7  - 表情包/热图
+    """
+
+    sub_type: int = 0
+    summary: str | None = None
+
+    def __init__(self, sub_type: int = 0, summary: str | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.sub_type = sub_type
+        self.summary = summary
+
 
 @dataclass
 class ParserConfig:
@@ -82,7 +100,7 @@ class PlatformMessageParser[E: AstrMessageEvent]:
     @staticmethod
     def _is_type_parsable(component: BaseMessageComponent) -> bool:
         return isinstance(component, (
-            File, Video, Record, Image,
+            File, Video, Record, Image, Face,
             Node, Nodes, At, AtAll, Reply,
             Plain, Share, Contact, Location, Music, Json, Forward,
         ))
@@ -97,11 +115,14 @@ class PlatformMessageParser[E: AstrMessageEvent]:
             logger.warning(f"不支持的消息组件类型: {component.type}")
             return None
 
-        element: dict[str, Any] = {"type": component.type}
+        element: dict[str, Any] = {"type": component.type.lower()}
 
         if isinstance(component, Reply):
             element["id"] = component.id
-            element["origin_summary"] = component.message_str
+            reply_chain = getattr(component, "chain", None) or []
+            element["summary"] = self.build_summary(
+                [c for c in reply_chain if not isinstance(c, Reply)]
+            )
             return element
 
         if isinstance(component, (File, Video, Image, Record)):
@@ -118,6 +139,13 @@ class PlatformMessageParser[E: AstrMessageEvent]:
             if isinstance(component, Record):
                 if component.text:
                     element["text"] = component.text
+
+            if isinstance(component, Image):
+                element["sub_type"] = getattr(component, "sub_type", 0)
+                summary = getattr(component, "summary", None)
+                if summary:
+                    element["summary"] = summary
+
             return element
 
         raw = await component.to_dict()
@@ -209,8 +237,8 @@ class PlatformMessageParser[E: AstrMessageEvent]:
 
     # ==================== summary 构建 ====================
 
-    @staticmethod
     def build_summary(
+        self,
         chain: list[BaseMessageComponent],
     ) -> str:
         parts: list[str] = []
@@ -218,7 +246,11 @@ class PlatformMessageParser[E: AstrMessageEvent]:
             if isinstance(comp, Plain):
                 parts.append(comp.text)
             elif isinstance(comp, Image):
-                parts.append("[图片]")
+                summary = getattr(comp, "summary", "")
+                if summary:
+                    parts.append(summary if summary.startswith("[") and summary.endswith("]") else f"[{summary}]")
+                else:
+                    parts.append("[图片]")
             elif isinstance(comp, Face):
                 parts.append(f"[表情:{comp.id}]")
             elif isinstance(comp, At):
@@ -226,10 +258,13 @@ class PlatformMessageParser[E: AstrMessageEvent]:
             elif isinstance(comp, AtAll):
                 parts.append("[@:全体成员]")
             elif isinstance(comp, Reply):
-                parts.append(
-                    f"[引用消息:({comp.sender_nickname}:{comp.message_str})]"
-                    if comp.message_str else "[引用消息]"
+                reply_summary = self.build_summary(
+                    [c for c in getattr(comp, "chain", []) if not isinstance(c, Reply)]
                 )
+                if reply_summary:
+                    parts.append(f"[引用消息:({comp.sender_nickname}:{reply_summary})]")
+                else:
+                    parts.append("[引用消息]")
             elif isinstance(comp, Record):
                 if comp.text:
                     parts.append(f"[语音:({comp.text})]")
@@ -241,16 +276,10 @@ class PlatformMessageParser[E: AstrMessageEvent]:
                 parts.append("[文件]")
             elif isinstance(comp, Json):
                 parts.append("[JSON]")
-            elif isinstance(comp, Forward):
+            elif isinstance(comp, (Forward, Nodes)):
                 summary = getattr(comp, "summary", "")
                 if summary:
-                    parts.append(f"[聊天记录:({summary})]")
-                else:
-                    parts.append("[聊天记录]")
-            elif isinstance(comp, Nodes):
-                summary = getattr(comp, "summary", "")
-                if summary:
-                    parts.append(f"[聊天记录({summary})]")
+                    parts.append(f"[聊天记录:{summary}]")
                 else:
                     parts.append("[聊天记录]")
             else:

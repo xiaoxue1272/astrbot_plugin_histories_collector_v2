@@ -114,6 +114,7 @@ class ESHelper:
                     },
                 },
                 "summary": {"type": "text"},
+                "types": {"type": "keyword"},
                 "messages": {
                     "type": "nested",
                     "dynamic": False,

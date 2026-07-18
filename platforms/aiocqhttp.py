@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import json
 import re
 import xml.etree.ElementTree as ET
 from typing import Any, Awaitable, Callable
@@ -26,7 +25,8 @@ from astrbot.api import logger
 from data.plugins.astrbot_plugin_histories_collector_v2.platforms.base import (
     PlatformMessageParser,
     EnhancedForward,
-    EnhancedNodes
+    EnhancedImage,
+    EnhancedNodes,
 )
 
 
@@ -121,9 +121,13 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     def _parse_text(data: dict) -> Plain:
         return Plain(text=str(data.get("text", "")))
 
-    @staticmethod
-    def _parse_image(data: dict) -> Image:
-        return Image(url=data.get("url", ""), file=data.get("file", ""))
+    def _parse_image(self, data: dict) -> Image:
+        return EnhancedImage(
+            url=data.get("url", ""),
+            file=data.get("file", ""),
+            sub_type=int(data.get("sub_type", 0)),
+            summary=data.get("summary") or None,
+        )
 
     async def _parse_record(self, data: dict) -> Record:
         return Record(
@@ -134,11 +138,18 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
 
     @staticmethod
     def _parse_video(data: dict) -> Video:
-        return Video(url=data.get("url", ""), file=data.get("file", ""))
+        return Video(
+            url=data.get("url", ""),
+            file=data.get("file", ""),
+        )
 
     @staticmethod
     def _parse_file(data: dict) -> File:
-        return File(name=data.get("name", ""), url=data.get("url", ""), file=data.get("file", ""))
+        return File(
+            name=data.get("name", ""),
+            url=data.get("url", ""),
+            file=data.get("file", ""),
+        )
 
     async def _parse_at(self, data: dict) -> At:
         qq = str(data.get("qq", ""))
@@ -154,16 +165,14 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         if msg_data:
             sender = msg_data.get("sender", {})
             sub_msgs = msg_data.get("message", [])
-            sub_msgs = [m for m in sub_msgs if m.get("type") != "reply"]
             reply_chain = await self._onebot_segments_to_chain(sub_msgs)
             logger.debug(f"reply {reply_id}: sender={sender.get('nickname')}, chain 长度={len(reply_chain)}")
             return Reply(
                 id=reply_id,
                 chain=reply_chain,
                 sender_id=sender.get("user_id"),
-                sender_nickname=sender.get("nickname"),
+                sender_nickname=sender.get("card") or sender.get("nickname"),
                 time=sender.get("timestamp"),
-                message_str=self.build_summary(reply_chain),
             )
         logger.warning(f"reply {reply_id}: get_msg 失败，仅存 id")
         return Reply(id=reply_id)
@@ -251,7 +260,10 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     # ---- sender ----
 
     async def get_sender(self) -> dict:
-        sender_doc = await super().get_sender()
+        sender_doc = {
+            "id": self._event.get_sender_id(),
+            "name": self._event.get_sender_name(),
+        }
         raw = self._event.message_obj.raw_message
         raw_sender = getattr(raw, "sender", None) if raw else None
         if isinstance(raw_sender, dict):
@@ -263,9 +275,6 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     # ---- Forward 能力 ----
 
     async def resolve_forward_messages(self, forward_id: str) -> list[Node] | None:
-        if not isinstance(self._event, AiocqhttpMessageEvent):
-            return None
-
         call_action = self._event.bot.api.call_action
         forward_data = await self._retry(
             lambda: call_action("get_forward_msg", id=forward_id),
@@ -299,9 +308,6 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
 
     async def get_msg(self, message_id: str) -> dict | None:
         """通过 OneBot API 获取指定消息的完整数据。"""
-        if not isinstance(self._event, AiocqhttpMessageEvent):
-            return None
-
         call_action = self._event.bot.api.call_action
         result = await self._retry(
             lambda: call_action("get_msg", message_id=message_id),
@@ -309,25 +315,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         )
         return result if isinstance(result, dict) else None
 
-    @staticmethod
-    def _build_message_str(chain: list[BaseMessageComponent]) -> str:
-        """从消息链构建纯文本 message_str，与框架行为一致。
-
-        只提取 Plain.text 和 At 的昵称/QQ，忽略图片、表情等非文本组件。
-        """
-        parts: list[str] = []
-        for comp in chain:
-            if isinstance(comp, Plain):
-                parts.append(comp.text)
-            elif isinstance(comp, At):
-                parts.append(f" @{comp.name or comp.qq} ")
-        return "".join(parts)
-
-
     async def fetch_record_text(self) -> str | None:
-        if not isinstance(self._event, AiocqhttpMessageEvent):
-            return None
-
         call_action = self._event.bot.api.call_action
         message_id = self._event.message_obj.message_id
         result = await self._retry(
@@ -345,8 +333,6 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         """通过 get_group_member_info 获取群名片或群昵称。"""
         if user_id is None:
             user_id = self._event.get_sender_id()
-        if not isinstance(self._event, AiocqhttpMessageEvent):
-            return None
         call_action = self._event.bot.api.call_action
         result = await self._retry(
             lambda: call_action("get_group_member_info", group_id=self._event.get_group_id(), user_id=user_id),
@@ -362,8 +348,6 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         """通过 get_stranger_info 获取 QQ 昵称。"""
         if user_id is None:
             user_id = self._event.get_sender_id()
-        if not isinstance(self._event, AiocqhttpMessageEvent):
-            return None
         call_action = self._event.bot.api.call_action
         result = await self._retry(
             lambda: call_action("get_stranger_info", user_id=user_id),

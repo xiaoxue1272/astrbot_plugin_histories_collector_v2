@@ -19,13 +19,6 @@ class FileCache:
     负责从消息组件中下载文件、哈希去重、按类型分类存储。
     """
 
-    _TYPE_DIR: dict[type, str] = {
-        Image: "image",
-        Video: "video",
-        Record: "record",
-        File: "file",
-    }
-
     _EXT_FALLBACK: dict[type, str] = {
         Image: ".jpg",
         Video: ".mp4",
@@ -58,10 +51,26 @@ class FileCache:
             return suffix.lower()
         return FileCache._EXT_FALLBACK.get(type(component), "")
 
-    def _build_store_path(self, component, content_hash: str, extension: str) -> Path:
-        type_dir = self._TYPE_DIR.get(type(component), "file")
-        sub_dir = self._store_dir / type_dir
+    @staticmethod
+    def _get_type_dir(component) -> str:
+        """Return the directory name for the component's media type.
+
+        Uses isinstance so that subclasses (e.g. EnhancedImage) are matched
+        correctly against their base types.
+        """
         if isinstance(component, Image):
+            return "image"
+        if isinstance(component, Video):
+            return "video"
+        if isinstance(component, Record):
+            return "record"
+        return "file"
+
+    def _build_store_path(self, component, content_hash: str, extension: str) -> Path:
+        type_dir = self._get_type_dir(component)
+        sub_dir = self._store_dir / type_dir
+        if isinstance(component, Image) and getattr(component, "sub_type", 0) != 0:
+            # Stickers / animated emoji: flat dir by extension to avoid cross-month duplicates
             sub_dir = sub_dir / extension.lstrip(".")
         else:
             now = datetime.now()
@@ -126,10 +135,20 @@ class FileCache:
             existing_sha256 = self._compute_hash(str(dest), "sha256")
             if new_sha256 == existing_sha256:
                 logger.debug(f"文件缓存命中: {dest}")
+                self._cleanup_temp(temp_path)
                 return dest.relative_to(self._store_dir).as_posix(), None
             logger.warning(f"MD5 碰撞: {temp_path}，改用 SHA-256 命名")
             dest = self._build_store_path(component, new_sha256, extension)
 
         shutil.copy(temp_path, dest)
         logger.debug(f"文件已缓存: {dest}")
+        self._cleanup_temp(temp_path)
         return dest.relative_to(self._store_dir).as_posix(), None
+
+    @staticmethod
+    def _cleanup_temp(temp_path: str) -> None:
+        """删除下载的临时文件。"""
+        try:
+            Path(temp_path).unlink(missing_ok=True)
+        except OSError:
+            pass

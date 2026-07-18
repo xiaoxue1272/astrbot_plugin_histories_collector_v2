@@ -102,7 +102,7 @@ class HistoriesCollectorV2Plugin(Star):
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     @filter.platform_adapter_type(PlatformAdapterType.ALL)
-    async def on_group_message(self, event: AstrMessageEvent) -> None:
+    async def on_group_message(self, event: AstrMessageEvent):
         """处理全平台群消息。
 
         Args:
@@ -121,7 +121,10 @@ class HistoriesCollectorV2Plugin(Star):
         if doc is None:
             return
 
-        await self.es_helper.save_message(next(self.id_generator), doc)
+        try:
+            await self.es_helper.save_message(next(self.id_generator), doc)
+        except Exception as e:
+            logger.error(f"ES 保存消息失败，消息已丢弃: {e}")
 
     async def _build_document(self, event: AstrMessageEvent) -> dict | None:
         """构建 ES 文档。
@@ -153,6 +156,7 @@ class HistoriesCollectorV2Plugin(Star):
             "group": group_doc,
             "sender": sender_doc,
             "summary": platform_parser.build_summary(chain),
+            "types": list(dict.fromkeys(comp.type.lower() for comp in chain)),
             "messages": await platform_parser.parse_message_chain(chain),
         }
         return doc
