@@ -148,6 +148,10 @@ class HistoriesCollectorV2Plugin(Star):
         sender_doc = await platform_parser.get_sender()
         chain = await platform_parser.get_chain()
 
+        # 消息链为空（如系统通知、框架无法解析的消息），跳过不写入 ES
+        if not chain:
+            return None
+
         doc = {
             "@timestamp": int(getattr(raw, "time", event.message_obj.timestamp) * 1000),
             "platform": event.get_platform_name().strip(),
