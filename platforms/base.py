@@ -117,35 +117,36 @@ class PlatformMessageParser[E: AstrMessageEvent]:
 
         element: dict[str, Any] = {"type": component.type.lower()}
 
-        if isinstance(component, Reply):
+        if isinstance(component, At):
+            if isinstance(component, AtAll) or component.qq == "all":
+                element["type"] = "at_all"
+            element["qq"] = component.qq
+            element["name"] = component.name
+            return element
+        elif isinstance(component, Reply):
             element["id"] = component.id
             reply_chain = getattr(component, "chain", None) or []
             element["summary"] = self.build_summary(
                 [c for c in reply_chain if not isinstance(c, Reply)]
             )
             return element
-
-        if isinstance(component, (File, Video, Image, Record)):
+        elif isinstance(component, (File, Video, Image, Record)):
             url = getattr(component, "url", None) or ""
             if url and is_http_url(url):
                 element["url"] = url
-
             path, warning = await self._file_cache.download(component)
             if path:
                 element["path"] = path
             if warning:
                 element["warn"] = warning
-
             if isinstance(component, Record):
                 if component.text:
                     element["text"] = component.text
-
-            if isinstance(component, Image):
+            elif isinstance(component, Image):
                 element["sub_type"] = getattr(component, "sub_type", 0)
                 summary = getattr(component, "summary", None)
                 if summary:
                     element["summary"] = summary
-
             return element
 
         raw = await component.to_dict()
@@ -253,10 +254,10 @@ class PlatformMessageParser[E: AstrMessageEvent]:
                     parts.append("[图片]")
             elif isinstance(comp, Face):
                 parts.append(f"[表情:{comp.id}]")
-            elif isinstance(comp, At):
-                parts.append(f"[@:{comp.name}]")
             elif isinstance(comp, AtAll):
                 parts.append("[@:全体成员]")
+            elif isinstance(comp, At):
+                parts.append(f"[@:{comp.name}]")
             elif isinstance(comp, Reply):
                 reply_summary = self.build_summary(
                     [c for c in getattr(comp, "chain", []) if not isinstance(c, Reply)]

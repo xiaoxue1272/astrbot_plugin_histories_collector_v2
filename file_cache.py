@@ -66,7 +66,12 @@ class FileCache:
             return "record"
         return "file"
 
-    def _build_store_path(self, component, content_hash: str, extension: str) -> Path:
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Remove characters unsafe for filesystem paths."""
+        return "".join(c for c in name if c not in r'<>:"/\|?*')
+
+    def _build_store_path(self, component, content_hash: str = "", extension: str = "") -> Path:
         type_dir = self._get_type_dir(component)
         sub_dir = self._store_dir / type_dir
         if isinstance(component, Image) and getattr(component, "sub_type", 0) != 0:
@@ -76,6 +81,13 @@ class FileCache:
             now = datetime.now()
             sub_dir = sub_dir / str(now.year) / f"{now.month:02d}"
         sub_dir.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(component, File):
+            name = getattr(component, "name", "") or ""
+            if name:
+                safe_name = self._sanitize_filename(name)
+                return sub_dir / safe_name
+
         return sub_dir / f"{content_hash[:16]}{extension}"
 
     async def download(
@@ -125,6 +137,17 @@ class FileCache:
                 pass
             logger.info(f"文件体积超出限制 ({file_bytes} 字节)，已跳过: {temp_path}")
             return None, f"文件超过 {self._max_file_size_mb}MB 限制 ({format_bytes_to_mb(file_bytes)})"
+
+        if isinstance(component, File) and getattr(component, "name", ""):
+            dest = self._build_store_path(component)
+            if dest.exists():
+                logger.debug(f"文件缓存命中: {dest}")
+                self._cleanup_temp(temp_path)
+                return dest.relative_to(self._store_dir).as_posix(), None
+            shutil.copy(temp_path, dest)
+            logger.debug(f"文件已缓存: {dest}")
+            self._cleanup_temp(temp_path)
+            return dest.relative_to(self._store_dir).as_posix(), None
 
         md5_hash = self._compute_hash(temp_path, "md5")
         extension = self._extract_extension(temp_path, component)

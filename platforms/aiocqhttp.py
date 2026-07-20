@@ -17,7 +17,7 @@ from astrbot.core.message.components import (
     Plain,
     Record,
     Reply,
-    Video,
+    Video, AtAll,
 )
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
@@ -153,6 +153,8 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
 
     async def _parse_at(self, data: dict) -> At:
         qq = str(data.get("qq", ""))
+        if qq == "all":
+            return AtAll(name="全体成员")
         name = (await self.get_group_member_name(qq)
                 or await self.get_stranger_name(qq))
         logger.debug(f"解析 @: qq={qq}, name={name}")
