@@ -114,16 +114,16 @@
 { "type": "file", "url": "https://example.com/doc.pdf", "path": "file/2026/07/d4e5f6g7.pdf", "name": "doc.pdf" }
 ```
 
-### At — @某人
+### At — @某人 / @全体成员
 
 ```json
-{ "type": "at", "qq": "1132610635" }
+{ "type": "at", "qq": "1132610635", "name": "张三" }
 ```
 
-### AtAll — @全体成员
+@全体成员同样以 `at` 类型存储，`qq` 字段为 `"all"`：
 
 ```json
-{ "type": "at_all" }
+{ "type": "at", "qq": "all", "name": "全体成员" }
 ```
 
 ### Reply — 引用回复

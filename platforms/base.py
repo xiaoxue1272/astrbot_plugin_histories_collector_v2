@@ -7,7 +7,6 @@ import aiohttp
 from astrbot.api import logger
 from astrbot.core.message.components import (
     At,
-    AtAll,
     BaseMessageComponent,
     Contact,
     Face,
@@ -101,7 +100,7 @@ class PlatformMessageParser[E: AstrMessageEvent]:
     def _is_type_parsable(component: BaseMessageComponent) -> bool:
         return isinstance(component, (
             File, Video, Record, Image, Face,
-            Node, Nodes, At, AtAll, Reply,
+            Node, Nodes, At, Reply,
             Plain, Share, Contact, Location, Music, Json, Forward,
         ))
 
@@ -118,8 +117,6 @@ class PlatformMessageParser[E: AstrMessageEvent]:
         element: dict[str, Any] = {"type": component.type.lower()}
 
         if isinstance(component, At):
-            if isinstance(component, AtAll) or component.qq == "all":
-                element["type"] = "at_all"
             element["qq"] = component.qq
             element["name"] = component.name
             return element
@@ -147,6 +144,10 @@ class PlatformMessageParser[E: AstrMessageEvent]:
                 summary = getattr(component, "summary", None)
                 if summary:
                     element["summary"] = summary
+            elif isinstance(component, File):
+                name = getattr(component, "name", "") or ""
+                if name:
+                    element["name"] = name
             return element
 
         raw = await component.to_dict()
@@ -254,8 +255,6 @@ class PlatformMessageParser[E: AstrMessageEvent]:
                     parts.append("[图片]")
             elif isinstance(comp, Face):
                 parts.append(f"[表情:{comp.id}]")
-            elif isinstance(comp, AtAll):
-                parts.append("[@:全体成员]")
             elif isinstance(comp, At):
                 parts.append(f"[@:{comp.name}]")
             elif isinstance(comp, Reply):

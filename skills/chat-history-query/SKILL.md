@@ -81,7 +81,7 @@ description: >
 | `forward` | `id`, `messages[]` |
 | `nodes` | `messages[]` |
 | `node` | `user_id`, `nickname`, `messages[]` |
-| `at_all` | (无额外字段) |
+
 
 ## 查询示例
 
@@ -214,7 +214,7 @@ description: >
 }
 ```
 
-支持的 type：`plain`、`image`、`video`、`record`、`file`、`at`、`reply`、`forward`、`face`、`json`、`nodes`、`node`、`at_all`。
+支持的 type：`plain`、`image`、`video`、`record`、`file`、`at`、`reply`、`forward`、`face`、`json`、`nodes`、`node`。
 
 > 如需同时匹配多个 type，用 `bool` + `should`：
 > ```json
