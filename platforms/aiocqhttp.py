@@ -1,8 +1,7 @@
-import asyncio
 import inspect
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from astrbot.core.message.components import (
     At,
@@ -28,6 +27,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.platforms.base import (
     EnhancedImage,
     EnhancedNodes,
 )
+from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 
 
 class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
@@ -60,34 +60,6 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
             if result is not None:
                 chain.append(result)
         return chain
-
-    @staticmethod
-    async def _retry(
-        action: Callable[[], Awaitable[Any]],
-        action_name: str,
-        max_retries: int = 3,
-        delay: float = 5.0,
-    ) -> Any | None:
-        """带重试的异步调用封装。
-
-        Args:
-            action: 异步可调用对象。
-            action_name: 操作名称（用于日志）。
-            max_retries: 最大重试次数。
-            delay: 重试间隔（秒）。
-
-        Returns:
-            成功时返回结果，全部失败返回 None。
-        """
-        for attempt in range(max_retries):
-            try:
-                return await action()
-            except Exception as e:
-                logger.debug(f"{action_name} 失败(尝试 {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-        logger.debug(f"{action_name}: {max_retries} 次重试均失败")
-        return None
 
     async def _parse_onebot_segment(
         self,
@@ -278,7 +250,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
 
     async def resolve_forward_messages(self, forward_id: str) -> list[Node] | None:
         call_action = self._event.bot.api.call_action
-        forward_data = await self._retry(
+        forward_data = await async_retry(
             lambda: call_action("get_forward_msg", id=forward_id),
             f"get_forward_msg({forward_id})",
         )
@@ -311,7 +283,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     async def get_msg(self, message_id: str) -> dict | None:
         """通过 OneBot API 获取指定消息的完整数据。"""
         call_action = self._event.bot.api.call_action
-        result = await self._retry(
+        result = await async_retry(
             lambda: call_action("get_msg", message_id=message_id),
             f"get_msg({message_id})",
         )
@@ -320,7 +292,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     async def fetch_record_text(self) -> str | None:
         call_action = self._event.bot.api.call_action
         message_id = self._event.message_obj.message_id
-        result = await self._retry(
+        result = await async_retry(
             lambda: call_action("fetch_ptt_text", message_id=message_id),
             f"fetch_ptt_text({message_id})",
         )
@@ -336,7 +308,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action
-        result = await self._retry(
+        result = await async_retry(
             lambda: call_action("get_group_member_info", group_id=self._event.get_group_id(), user_id=user_id),
             f"get_group_member_info({user_id})",
         )
@@ -351,7 +323,7 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action
-        result = await self._retry(
+        result = await async_retry(
             lambda: call_action("get_stranger_info", user_id=user_id),
             f"get_stranger_info({user_id})",
         )
