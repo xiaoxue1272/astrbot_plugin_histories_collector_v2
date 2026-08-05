@@ -1,10 +1,10 @@
-import asyncio
 from typing import Any
 
 from elasticsearch import AsyncElasticsearch, NotFoundError
 
 from astrbot.api import logger
 from data.plugins.astrbot_plugin_histories_collector_v2.config import ESConfig
+from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 
 
 class ESHelper:
@@ -214,37 +214,31 @@ class ESHelper:
             logger.warning("ES 客户端不可用，跳过消息保存。")
             return
 
-        last_exception = None
-        for attempt in range(1, self._MAX_SAVE_RETRIES + 1):
-            try:
-                response = await self._es_client.create(
-                    index=self._alias,
-                    id=doc_id,
-                    document=doc_body,
-                    require_alias=True,
-                )
-                result = response.get("result")
-                if result in ("created", "updated"):
-                    return
-                raise Exception(
-                    f"ES 写入返回异常结果: {result}\n"
-                    f"响应: {response}\n"
-                    f"文档: {doc_body}"
-                )
-            except Exception as e:
-                last_exception = e
-                if attempt < self._MAX_SAVE_RETRIES:
-                    delay = self._RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    logger.warning(
-                        f"ES 保存失败 (第 {attempt}/{self._MAX_SAVE_RETRIES} 次)，"
-                        f"{delay}秒后重试: {e}"
-                    )
-                    await asyncio.sleep(delay)
+        async def _do_save():
+            response = await self._es_client.create(
+                index=self._alias,
+                id=doc_id,
+                document=doc_body,
+                require_alias=True,
+            )
+            result = response.get("result")
+            if result in ("created", "updated"):
+                return response
+            raise Exception(
+                f"ES 写入返回异常结果: {result}\n"
+                f"响应: {response}\n"
+                f"文档: {doc_body}"
+            )
 
-        logger.error(
-            f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: {last_exception}"
-        )
-        raise last_exception
+        try:
+            return await async_retry(
+                _do_save,
+                max_retries=self._MAX_SAVE_RETRIES,
+                delay=lambda attempt: self._RETRY_BASE_DELAY * (2 ** attempt),
+            )
+        except Exception as e:
+            logger.warning(f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: {e}")
+            raise
 
     async def search(self, body: dict) -> Any:
         """执行 ES 搜索查询。

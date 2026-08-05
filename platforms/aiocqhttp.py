@@ -250,10 +250,13 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
 
     async def resolve_forward_messages(self, forward_id: str) -> list[Node] | None:
         call_action = self._event.bot.api.call_action
-        forward_data = await async_retry(
-            lambda: call_action("get_forward_msg", id=forward_id),
-            f"get_forward_msg({forward_id})",
-        )
+        try:
+            forward_data = await async_retry(
+                lambda: call_action("get_forward_msg", id=forward_id),
+            )
+        except Exception:
+            logger.warning(f"转发消息 {forward_id}: 获取失败或响应异常")
+            return None
         if not isinstance(forward_data, dict):
             logger.warning(f"转发消息 {forward_id}: 获取失败或响应异常")
             return None
@@ -283,19 +286,23 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
     async def get_msg(self, message_id: str) -> dict | None:
         """通过 OneBot API 获取指定消息的完整数据。"""
         call_action = self._event.bot.api.call_action
-        result = await async_retry(
-            lambda: call_action("get_msg", message_id=message_id),
-            f"get_msg({message_id})",
-        )
+        try:
+            result = await async_retry(
+                lambda: call_action("get_msg", message_id=message_id),
+            )
+        except Exception:
+            return None
         return result if isinstance(result, dict) else None
 
     async def fetch_record_text(self) -> str | None:
         call_action = self._event.bot.api.call_action
         message_id = self._event.message_obj.message_id
-        result = await async_retry(
-            lambda: call_action("fetch_ptt_text", message_id=message_id),
-            f"fetch_ptt_text({message_id})",
-        )
+        try:
+            result = await async_retry(
+                lambda: call_action("fetch_ptt_text", message_id=message_id),
+            )
+        except Exception:
+            return None
         if isinstance(result, dict):
             text = result.get("text")
             if text:
@@ -308,10 +315,12 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action
-        result = await async_retry(
-            lambda: call_action("get_group_member_info", group_id=self._event.get_group_id(), user_id=user_id),
-            f"get_group_member_info({user_id})",
-        )
+        try:
+            result = await async_retry(
+                lambda: call_action("get_group_member_info", group_id=self._event.get_group_id(), user_id=user_id),
+            )
+        except Exception:
+            return None
         if isinstance(result, dict):
             name = result.get("card") or result.get("nickname") or ""
             logger.debug(f"get_group_member_info: user_id={user_id}, name={name}")
@@ -323,10 +332,12 @@ class AiocqhttpMessageParser(PlatformMessageParser[AiocqhttpMessageEvent]):
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action
-        result = await async_retry(
-            lambda: call_action("get_stranger_info", user_id=user_id),
-            f"get_stranger_info({user_id})",
-        )
+        try:
+            result = await async_retry(
+                lambda: call_action("get_stranger_info", user_id=user_id),
+            )
+        except Exception:
+            return None
         if isinstance(result, dict):
             name = result.get("nickname") or ""
             logger.debug(f"get_stranger_info: user_id={user_id}, name={name}")
