@@ -334,10 +334,10 @@ def build_summary(chain: list[EnhancedComponent]) -> str:
         elif isinstance(comp, EnhancedMentionAll):
             parts.append("[@全体成员]")
         elif isinstance(comp, EnhancedReply):
-            reply_messages = comp.messages or []
-            inner = build_summary(reply_messages)
-            if comp.sender_nickname and inner:
-                parts.append(f"[引用消息:({comp.sender_nickname}:{inner})]")
+            reply_messages = [c for c in (comp.messages or []) if not isinstance(c, EnhancedReply)]
+            inner_summary = build_summary(reply_messages)
+            if comp.sender_nickname and inner_summary:
+                parts.append(f"[引用消息:({comp.sender_nickname}:{inner_summary})]")
             else:
                 parts.append("[引用消息]")
         elif isinstance(comp, EnhancedVoice):

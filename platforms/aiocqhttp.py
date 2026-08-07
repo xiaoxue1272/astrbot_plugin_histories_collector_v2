@@ -216,6 +216,9 @@ class AiocqhttpPlatformHelper(PlatformHelper):
 
     async def _parse_reply(self, data: dict, depth: int = 0) -> EnhancedReply:
         reply_id = str(data.get("id", ""))
+        if depth >= self._config.max_nesting_depth:
+            logger.debug(f"回复已达最大嵌套深度，截断: id={reply_id}")
+            return EnhancedReply(id=reply_id)
         msg_data = await self.get_msg(reply_id)
         if msg_data:
             sender = msg_data.get("sender", {})
