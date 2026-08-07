@@ -11,7 +11,7 @@ class ESConfig:
     use_ik_analyzer: bool
 
     def __init__(self, config: dict[str, Any]):
-        self.hosts = config['hosts']
+        self.hosts = config.get('hosts', ['localhost:9200'])
         self.user = config.get('user', '')
         self.password = config.get('password', '')
         self.alias = config.get('alias', 'message-histories-v2')

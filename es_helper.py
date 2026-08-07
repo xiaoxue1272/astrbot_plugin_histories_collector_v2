@@ -31,7 +31,10 @@ class ESHelper:
         self._alias = config.alias
         self._ilm_policy_name = f"{self._alias}-policy"
         self._use_ik = config.use_ik_analyzer
-        self.is_connected: bool = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._es_client is not None
 
     async def initialize(self):
         """验证 ES 连接并建立索引，连接失败不崩溃。"""
@@ -52,8 +55,6 @@ class ESHelper:
 
         self._es_client = es
         logger.info("Elasticsearch 连接成功。")
-
-        self.is_connected = True
         await self._setup_indices()
 
     async def _setup_indices(self):

@@ -1,3 +1,5 @@
+from astrbot.api import logger
+
 from data.plugins.astrbot_plugin_histories_collector_v2.config import GroupFilterConfig
 
 
@@ -39,4 +41,5 @@ class GroupFilter:
         if self._mode == self.MODE_BLACKLIST:
             return group_id not in target_set
 
+        logger.warning(f"Unknown group filter mode '{self._mode}', defaulting to allow all.")
         return True

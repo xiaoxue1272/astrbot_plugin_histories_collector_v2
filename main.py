@@ -1,7 +1,5 @@
 import json
-from pathlib import Path
 
-import aiohttp
 from snowflake import SnowflakeGenerator
 
 from astrbot.api.event import AstrMessageEvent, filter
@@ -11,14 +9,17 @@ from astrbot.core import AstrBotConfig
 from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.star.filter.platform_adapter_type import PlatformAdapterType
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
 from data.plugins.astrbot_plugin_histories_collector_v2.config import (
     HistoriesCollectorConfig,
 )
 from data.plugins.astrbot_plugin_histories_collector_v2.es_helper import ESHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.group_filter import GroupFilter
-from data.plugins.astrbot_plugin_histories_collector_v2.platforms import ParserConfig, create_parser
+from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import build_summary
+from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import (
+    CollectorConfig,
+    create_platform_helper,
+)
+from data.plugins.astrbot_plugin_histories_collector_v2.utils import PLUGIN_NAME
 
 def _inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
     """Auto-scope query to current group when triggered from a group message."""
@@ -39,7 +40,7 @@ def _inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
 
 
 @register(
-    "astrbot_plugin_histories_collector_v2",
+    PLUGIN_NAME,
     "xiaoxue1272",
     "Astrbot 全平台群消息收集器V2(ES版)",
     "v0.1.0",
@@ -51,11 +52,10 @@ class HistoriesCollectorV2Plugin(Star):
     """
 
     config: HistoriesCollectorConfig
-    http_session: aiohttp.ClientSession
     group_filter: GroupFilter
     es_helper: ESHelper
     id_generator: SnowflakeGenerator
-    parser_config: ParserConfig
+    collector_config: CollectorConfig
 
     @filter.llm_tool(name="search_es")
     async def search_es(self, event: AstrMessageEvent, body: dict) -> str:
@@ -84,13 +84,8 @@ class HistoriesCollectorV2Plugin(Star):
     async def initialize(self) -> None:
         """连接 Elasticsearch 并初始化索引。"""
         logger.info("HistoriesCollectorV2 插件正在初始化...")
-        self.http_session = aiohttp.ClientSession()
-        plugin_data_path = Path(get_astrbot_data_path()) / "plugin_data" / self.name
-        logger.info(f"文件存储目录: {plugin_data_path}")
 
-        self.parser_config = ParserConfig(
-            http_session=self.http_session,
-            plugin_data_dir=plugin_data_path,
+        self.collector_config = CollectorConfig(
             max_nesting_depth=self.config.max_nesting_depth,
             max_file_size_mb=self.config.max_file_size_mb,
         )
@@ -108,7 +103,7 @@ class HistoriesCollectorV2Plugin(Star):
         Args:
             event: 跨平台消息事件（仅依赖基类 API，无平台子类依赖）。
         """
-        if not self.es_helper.is_connected:
+        if not self.es_helper or not self.es_helper.is_connected:
             return
 
         platform_name = event.get_platform_name()
@@ -127,28 +122,28 @@ class HistoriesCollectorV2Plugin(Star):
             logger.error(f"ES 保存消息失败，消息已丢弃: {e}")
 
     async def _build_document(self, event: AstrMessageEvent) -> dict | None:
-        """构建 ES 文档。
+        """Build ES document.
 
-        平台差异化逻辑（chain 构建、sender/group、Forward summary、消息链解析）
-        统一通过 PlatformMessageParser 处理。
+        Platform-specific logic (chain building, sender/group, forward summary,
+        message chain parsing) is handled uniformly through the platform helper.
 
         Args:
-            event: 跨平台消息事件。
+            event: Cross-platform message event.
 
         Returns:
-            待写入 ES 的字典。
+            Dict to be written to ES.
         """
         raw = event.message_obj.raw_message
-        if not raw or raw is None:
+        if not raw:
             return None
 
-        platform_parser = create_parser(event, self.parser_config)
+        helper = create_platform_helper(event, self.collector_config)
 
-        group_doc = await platform_parser.get_group()
-        sender_doc = await platform_parser.get_sender()
-        chain = await platform_parser.get_chain()
+        group_doc = await helper.get_group()
+        sender_doc = await helper.get_sender()
+        chain = await helper.get_chain()
 
-        # 消息链为空（如系统通知、框架无法解析的消息），跳过不写入 ES
+        # Skip empty chains (system notifications, unparseable messages)
         if not chain:
             return None
 
@@ -159,9 +154,9 @@ class HistoriesCollectorV2Plugin(Star):
             "message_id": event.message_obj.message_id,
             "group": group_doc,
             "sender": sender_doc,
-            "summary": platform_parser.build_summary(chain),
-            "types": list(dict.fromkeys(comp.type.lower() for comp in chain)),
-            "messages": await platform_parser.parse_message_chain(chain),
+            "summary": build_summary(chain),
+            "types": list(dict.fromkeys(comp.type for comp in chain)),
+            "messages": [comp.to_dict() for comp in chain],
         }
         return doc
 
@@ -170,5 +165,3 @@ class HistoriesCollectorV2Plugin(Star):
         logger.info("HistoriesCollectorV2 插件正在关闭...")
         if self.es_helper:
             await self.es_helper.close()
-        if self.http_session:
-            await self.http_session.close()
