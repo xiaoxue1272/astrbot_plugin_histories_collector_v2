@@ -1,11 +1,13 @@
-"""Platform helper base and factory.
+"""平台辅助类基类与工厂函数。
 
-PlatformHelper (base):
-  - get_chain / get_sender / get_group: platform interface.
-  - _convert: default framework component → Enhanced conversion.
-    Subclasses override this for platform-specific conversion,
-    falling back to super()._convert() as needed.
+PlatformHelper (基类):
+  - get_chain / get_sender / get_group: 平台接口。
+  - _convert: 默认框架组件 → Enhanced 转换。
+    子类覆写此方法实现平台特定转换，
+    失败时回退到 super()._convert()。
 """
+
+from astrbot.api import logger
 
 from dataclasses import dataclass
 
@@ -46,38 +48,34 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedVideo,
     EnhancedVoice,
 )
-from data.plugins.astrbot_plugin_histories_collector_v2.file_manager import FileManager
+from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import DownloadManager
 
 
 @dataclass
 class CollectorConfig:
-    """Shared configuration for platform helpers.
+    """平台辅助类共享配置。
 
     Args:
-        max_nesting_depth: Maximum message chain nesting depth.
-        max_file_size_mb: Maximum file size in MB for downloads.
+        max_nesting_depth: 消息链最大嵌套深度。
     """
 
     max_nesting_depth: int = 3
-    max_file_size_mb: int = 50
 
 
 class PlatformHelper:
-    """Base platform helper.
+    """平台辅助类基类。
 
-    Subclasses override get_chain() to return fully-hydrated Enhanced chains,
-    and _convert() for platform-specific component conversion.
+    子类覆写 get_chain() 返回已完整处理的 Enhanced 消息链，
+    覆写 _convert() 实现平台特定的组件转换。
     """
 
-    def __init__(self, event: AstrMessageEvent, config: CollectorConfig):
+    def __init__(self, event: AstrMessageEvent, config: CollectorConfig, download_manager: DownloadManager):
         self._event = event
         self._config = config
-        self._file_manager = FileManager(
-            max_file_size_mb=config.max_file_size_mb,
-        )
+        self._download_manager = download_manager
 
     async def get_chain(self) -> list[EnhancedComponent]:
-        """Build the Enhanced chain. Override in platform subclasses."""
+        """构建 Enhanced 消息链。子类覆写。"""
         results: list[EnhancedComponent] = []
         for comp in self._event.get_messages():
             enhanced = await self._convert(comp)
@@ -98,24 +96,23 @@ class PlatformHelper:
             "name": group_obj.group_name if group_obj else None,
         }
 
-    # ── Conversion ──
+    # ── 组件转换 ──
 
     async def _convert(
         self,
         component: BaseMessageComponent,
         ctx: object = None,
     ) -> EnhancedComponent | None:
-        """Convert a framework component to Enhanced.
+        """将框架消息组件转换为 Enhanced 类型。
 
-        Override in subclasses for platform-specific conversion.
-        Fall back to super()._convert() for unsupported types.
+        子类覆写实现平台特定转换，失败时回退到 super()._convert()。
 
         Args:
-            component: Framework message component.
-            ctx: Optional platform-specific context (e.g. OneBot segment dict).
+            component: 框架消息组件。
+            ctx: 平台特定上下文（如 OneBot segment dict）。
 
         Returns:
-            Enhanced component, or None for unsupported types.
+            Enhanced 组件，不支持的类型返回 None。
         """
         if isinstance(component, Plain):
             return EnhancedPlain(text=component.text)
@@ -186,27 +183,33 @@ class PlatformHelper:
                 content=getattr(component, "content", None),
                 image=getattr(component, "image", None),
             )
+        logger.debug(f"不支持的框架组件类型: {type(component).__name__}")
         return None
 
 
 class DefaultPlatformHelper(PlatformHelper):
-    """Default platform helper using framework-provided APIs."""
+    """默认平台辅助类，使用框架提供的 API。"""
 
 
-def create_platform_helper(event: AstrMessageEvent, config: CollectorConfig) -> PlatformHelper:
-    """Factory that returns the correct platform helper for the given event.
+def create_platform_helper(
+    event: AstrMessageEvent,
+    config: CollectorConfig,
+    download_manager: DownloadManager,
+) -> PlatformHelper:
+    """根据 event 类型创建对应的平台辅助类实例。
 
     Args:
-        event: AstrMessageEvent instance.
-        config: CollectorConfig instance.
+        event: AstrMessageEvent 实例。
+        config: CollectorConfig 实例。
+        download_manager: 下载管理器实例。
 
     Returns:
-        A platform helper instance.
+        平台辅助类实例。
     """
     from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
     from data.plugins.astrbot_plugin_histories_collector_v2.platforms.aiocqhttp import AiocqhttpPlatformHelper
 
     if isinstance(event, AiocqhttpMessageEvent):
-        return AiocqhttpPlatformHelper(event, config)
-    return DefaultPlatformHelper(event, config)
+        return AiocqhttpPlatformHelper(event, config, download_manager)
+    return DefaultPlatformHelper(event, config, download_manager)

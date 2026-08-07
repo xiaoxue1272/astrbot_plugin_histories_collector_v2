@@ -1,8 +1,11 @@
+from abc import ABC, abstractmethod
 from typing import Any
+
+from astrbot.core.utils.media_utils import MediaResolver
 
 
 class EnhancedSender:
-    """Sender info for EnhancedNode."""
+    """EnhancedNode 的发送者信息。"""
 
     id: str | None
     name: str | None
@@ -25,12 +28,12 @@ class EnhancedSender:
 
 
 class EnhancedComponent:
-    """Base for all Enhanced types. Subclasses set type."""
+    """Enhanced 类型基类，子类设置 type。"""
 
     type: str
 
     def to_dict(self) -> dict[str, Any]:
-        """Auto-scan instance fields, skip _* / None / empty."""
+        """自动扫描实例字段，跳过 _* / None / 空字符串。"""
         result: dict[str, Any] = {"type": self.type}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
@@ -41,7 +44,23 @@ class EnhancedComponent:
         return result
 
 
-# ---- Plain ----
+# ---- 文本 ----
+
+class EnhancedDownloadableComponent(EnhancedComponent, ABC):
+    """可下载媒体组件的抽象基类。
+
+    子类实现 download() 返回本地文件路径。
+    """
+
+    url: str | None
+    path: str | None
+    warn: str | None
+
+    @abstractmethod
+    async def download(self) -> str | None:
+        """下载媒体文件，返回本地临时文件路径。失败返回 None。"""
+        ...
+
 
 class EnhancedPlain(EnhancedComponent):
     type = "text"
@@ -51,7 +70,7 @@ class EnhancedPlain(EnhancedComponent):
         self.text = text
 
 
-# ---- Mention ----
+# ---- @提及 ----
 
 class EnhancedMention(EnhancedComponent):
     type = "mention"
@@ -61,77 +80,103 @@ class EnhancedMention(EnhancedComponent):
         self.name = name
 
 
-# ---- Mention All ----
+# ---- @全体成员 ----
 
 class EnhancedMentionAll(EnhancedComponent):
     type = "mention_all"
 
 
-# ---- File ----
+# ---- 文件 ----
 
-class EnhancedFile(EnhancedComponent):
+class EnhancedFile(EnhancedDownloadableComponent):
     type = "file"
     name: str | None
-    url: str | None
-    path: str | None
-    warn: str | None
 
     def __init__(self, name: str | None = None, url: str | None = None):
         self.name = name
         self.url = url
 
+    async def download(self) -> str | None:
+        """下载文件到本地临时目录，返回临时路径。"""
+        import uuid
+        from pathlib import Path
 
-# ---- Image / Sticker ----
+        from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+        from astrbot.core.utils.io import download_file
 
-class EnhancedImage(EnhancedComponent):
+        if not self.url:
+            return None
+        download_dir = Path(get_astrbot_temp_path())
+        download_dir.mkdir(parents=True, exist_ok=True)
+        if self.name:
+            filename = self.name
+        else:
+            filename = f"fileseg_{uuid.uuid4().hex}"
+        file_path = download_dir / filename
+        await download_file(self.url, str(file_path))
+        return str(file_path.resolve())
+
+
+# ---- 图片 / 贴纸 ----
+
+class EnhancedImage(EnhancedDownloadableComponent):
     type = "image"
-    url: str | None
-    path: str | None
-    warn: str | None
 
     def __init__(self, url: str | None = None):
         self.url = url
 
+    async def download(self) -> str | None:
+        from astrbot.core.utils.media_utils import MediaResolver
+        if not self.url:
+            return None
+        return await MediaResolver(self.url, media_type="image").to_path()
 
-class EnhancedSticker(EnhancedComponent):
+
+class EnhancedSticker(EnhancedDownloadableComponent):
     type = "sticker"
-    url: str | None
-    path: str | None
     summary: str | None
-    warn: str | None
 
     def __init__(self, url: str | None = None, summary: str | None = None):
         self.url = url
         self.summary = summary
 
+    async def download(self) -> str | None:
+        if not self.url:
+            return None
+        return await MediaResolver(self.url, media_type="image").to_path()
 
-# ---- Video ----
 
-class EnhancedVideo(EnhancedComponent):
+# ---- 视频 ----
+
+class EnhancedVideo(EnhancedDownloadableComponent):
     type = "video"
-    url: str | None
-    path: str | None
-    warn: str | None
 
     def __init__(self, url: str | None = None):
         self.url = url
 
+    async def download(self) -> str | None:
+        if not self.url:
+            return None
+        return await MediaResolver(self.url, media_type="video", default_suffix=".mp4").to_path()
 
-# ---- Voice ----
 
-class EnhancedVoice(EnhancedComponent):
+# ---- 语音 ----
+
+class EnhancedVoice(EnhancedDownloadableComponent):
     type = "voice"
-    url: str | None
-    path: str | None
     text: str | None
-    warn: str | None
 
     def __init__(self, url: str | None = None, text: str | None = None):
         self.url = url
         self.text = text
 
+    async def download(self) -> str | None:
+        if not self.url:
+            return None
+        return await MediaResolver(self.url, media_type="audio", default_suffix=".wav").to_path(target_format="wav")
 
-# ---- Reply ----
+
+# ---- 引用回复 ----
 
 class EnhancedReply(EnhancedComponent):
     type = "reply"
@@ -153,7 +198,7 @@ class EnhancedReply(EnhancedComponent):
         self.time = time
 
 
-# ---- Face ----
+# ---- 表情 ----
 
 class EnhancedFace(EnhancedComponent):
     type = "face"
@@ -163,7 +208,7 @@ class EnhancedFace(EnhancedComponent):
         self.id = id
 
 
-# ---- Json ----
+# ---- JSON ----
 
 class EnhancedJson(EnhancedComponent):
     type = "json"
@@ -173,7 +218,7 @@ class EnhancedJson(EnhancedComponent):
         self.data = data
 
 
-# ---- Forward ----
+# ---- 转发消息 ----
 
 class EnhancedForward(EnhancedComponent):
     type = "forward"
@@ -187,7 +232,7 @@ class EnhancedForward(EnhancedComponent):
         self.messages = messages
 
 
-# ---- Nodes ----
+# ---- 合并转发节点列表 ----
 
 class EnhancedNodes(EnhancedComponent):
     type = "nodes"
@@ -199,7 +244,7 @@ class EnhancedNodes(EnhancedComponent):
         self.messages = messages
 
 
-# ---- Node ----
+# ---- 转发节点 ----
 
 class EnhancedNode(EnhancedComponent):
     type = "node"
@@ -223,7 +268,7 @@ class EnhancedNode(EnhancedComponent):
         return result
 
 
-# ---- Share ----
+# ---- 分享 ----
 
 class EnhancedShare(EnhancedComponent):
     type = "share"
@@ -240,7 +285,7 @@ class EnhancedShare(EnhancedComponent):
         self.image = image
 
 
-# ---- Music ----
+# ---- 音乐 ----
 
 class EnhancedMusic(EnhancedComponent):
     type = "music"
@@ -266,7 +311,7 @@ class EnhancedMusic(EnhancedComponent):
 
 
 def build_summary(chain: list[EnhancedComponent]) -> str:
-    """Build a human-readable summary string from an Enhanced chain."""
+    """将 Enhanced 消息链构建为可读摘要字符串。"""
     parts: list[str] = []
     for comp in chain:
         if isinstance(comp, EnhancedPlain):
@@ -275,13 +320,15 @@ def build_summary(chain: list[EnhancedComponent]) -> str:
         elif isinstance(comp, EnhancedImage):
             parts.append("[图片]")
         elif isinstance(comp, EnhancedSticker):
-            summary = getattr(comp, "summary", None)
-            if summary:
-                parts.append(f"[贴纸:{summary}]")
+            if comp.summary is not None:
+                parts.append(f"[动画表情:{comp.summary}]")
             else:
-                parts.append("[贴纸]")
+                parts.append("[动画表情]")
         elif isinstance(comp, EnhancedFace):
-            parts.append(f"[表情:{comp.id}]")
+            if comp.id is not None:
+                parts.append(f"[表情:{comp.id}]")
+            else:
+                parts.append("[表情]")
         elif isinstance(comp, EnhancedMention):
             parts.append(f"[@:{comp.name}]")
         elif isinstance(comp, EnhancedMentionAll):

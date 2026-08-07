@@ -2,7 +2,7 @@ from typing import Any
 
 
 class ESConfig:
-    """Elasticsearch connection configuration."""
+    """Elasticsearch 连接配置。"""
 
     hosts: list[str]
     user: str
@@ -19,7 +19,7 @@ class ESConfig:
 
 
 class GroupFilterConfig:
-    """Group filter configuration with mode and per-platform group lists."""
+    """群组过滤配置，支持按模式和平台分组列表过滤。"""
 
     mode: str
     platforms: list[dict]
@@ -30,7 +30,7 @@ class GroupFilterConfig:
 
 
 class HistoriesCollectorConfig:
-    """Plugin configuration wrapper."""
+    """插件配置包装器。"""
 
     es_config: ESConfig
     group_filter: GroupFilterConfig

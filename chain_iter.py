@@ -1,16 +1,16 @@
-"""Message chain iterator — yields (component, context) pairs."""
+"""消息链迭代器 — 逐对产出 (框架组件, 上下文)。"""
 
 from astrbot.core.message.components import BaseMessageComponent
 
 
 class MessageChainIter:
-    """Iterate a framework message chain, yielding (comp, ctx) pairs.
+    """遍历框架消息链，逐对产出 (comp, ctx)。
 
-    Zero imports from project modules.
+    不依赖任何项目模块。
 
     Args:
-        chain: Framework message chain list.
-        context_list: Optional context list with same length as chain.
+        chain: 框架消息链列表。
+        context_list: 与 chain 等长的上下文列表，可选。
     """
 
     def __init__(

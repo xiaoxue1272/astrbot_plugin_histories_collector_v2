@@ -15,6 +15,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.config import (
 from data.plugins.astrbot_plugin_histories_collector_v2.es_helper import ESHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.group_filter import GroupFilter
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import build_summary
+from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import DownloadManager
 from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import (
     CollectorConfig,
     create_platform_helper,
@@ -43,7 +44,7 @@ def _inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
     PLUGIN_NAME,
     "xiaoxue1272",
     "Astrbot 全平台群消息收集器V2(ES版)",
-    "v0.1.0",
+    "v0.2.0",
 )
 class HistoriesCollectorV2Plugin(Star):
     """全平台群消息收集器，将消息结构化存入 Elasticsearch。
@@ -56,6 +57,7 @@ class HistoriesCollectorV2Plugin(Star):
     es_helper: ESHelper
     id_generator: SnowflakeGenerator
     collector_config: CollectorConfig
+    download_manager: DownloadManager
 
     @filter.llm_tool(name="search_es")
     async def search_es(self, event: AstrMessageEvent, body: dict) -> str:
@@ -87,6 +89,8 @@ class HistoriesCollectorV2Plugin(Star):
 
         self.collector_config = CollectorConfig(
             max_nesting_depth=self.config.max_nesting_depth,
+        )
+        self.download_manager = DownloadManager(
             max_file_size_mb=self.config.max_file_size_mb,
         )
 
@@ -137,14 +141,15 @@ class HistoriesCollectorV2Plugin(Star):
         if not raw:
             return None
 
-        helper = create_platform_helper(event, self.collector_config)
+        helper = create_platform_helper(event, self.collector_config, self.download_manager)
 
         group_doc = await helper.get_group()
         sender_doc = await helper.get_sender()
         chain = await helper.get_chain()
 
-        # Skip empty chains (system notifications, unparseable messages)
+        # 跳过空链（系统通知、无法解析的消息）
         if not chain:
+            logger.debug(f"消息链为空，跳过: message_id={event.message_obj.message_id}")
             return None
 
         doc = {
@@ -165,3 +170,5 @@ class HistoriesCollectorV2Plugin(Star):
         logger.info("HistoriesCollectorV2 插件正在关闭...")
         if self.es_helper:
             await self.es_helper.close()
+        if self.download_manager:
+            await self.download_manager.close()

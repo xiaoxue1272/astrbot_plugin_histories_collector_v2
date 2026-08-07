@@ -1,39 +1,9 @@
 """插件通用工具函数。"""
 
-import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-import aiohttp
-from aiohttp import ClientSession
-
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
 PLUGIN_NAME = "astrbot_plugin_histories_collector_v2"
-
-# ── Shared HTTP session (lazy-init singleton) ──
-
-_http_session: aiohttp.ClientSession | None = None
-_http_session_lock = asyncio.Lock()
-
-async def get_http_session() -> ClientSession:
-    """Return the shared aiohttp session with async-safe lazy init."""
-    global _http_session
-    if _http_session is not None:
-        return _http_session
-    async with _http_session_lock:
-        if _http_session is None:
-            _http_session = aiohttp.ClientSession()
-        assert _http_session is not None
-        return _http_session
-
-
-async def close_http_session() -> None:
-    """Close the shared aiohttp session if it was created."""
-    global _http_session
-    if _http_session is not None:
-        await _http_session.close()
-        _http_session = None
 
 
 async def async_retry(
@@ -56,6 +26,8 @@ async def async_retry(
     Raises:
         Exception: 重试次数用尽，抛出最后一次 action 的异常。
     """
+    import asyncio
+
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -91,11 +63,8 @@ def format_bytes_to_mb(size_bytes: int) -> str:
     """
     return f"{size_bytes / 1024 / 1024:.2f} MB"
 
+
 def get_plugin_data_dir() -> Path:
-    """Return the plugin data directory path."""
-    return Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
-
-
-def get_temp_dir() -> Path:
-    """Return the shared temp directory path."""
-    return Path(get_astrbot_data_path()) / "temp"
+    """返回插件数据目录路径。"""
+    from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+    return Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
