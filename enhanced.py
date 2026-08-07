@@ -33,14 +33,22 @@ class EnhancedComponent:
     type: str
 
     def to_dict(self) -> dict[str, Any]:
-        """自动扫描实例字段，跳过 _* / None / 空字符串。"""
+        """自动扫描实例字段，跳过 _* / None / 空字符串，递归转换嵌套组件。"""
         result: dict[str, Any] = {"type": self.type}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
                 continue
             if value is None or value == "":
                 continue
-            result[key] = value
+            if isinstance(value, EnhancedComponent):
+                result[key] = value.to_dict()
+            elif isinstance(value, list):
+                result[key] = [
+                    item.to_dict() if isinstance(item, EnhancedComponent) else item
+                    for item in value
+                ]
+            else:
+                result[key] = value
         return result
 
 
@@ -321,7 +329,7 @@ def build_summary(chain: list[EnhancedComponent]) -> str:
             parts.append("[图片]")
         elif isinstance(comp, EnhancedSticker):
             if comp.summary is not None:
-                parts.append(f"[动画表情:{comp.summary}]")
+                parts.append(comp.summary)
             else:
                 parts.append("[动画表情]")
         elif isinstance(comp, EnhancedFace):

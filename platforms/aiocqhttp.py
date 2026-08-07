@@ -90,7 +90,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
 
     # ── 转发消息解析 ──
 
-    async def resolve_forward(self, forward_id: str) -> list[EnhancedComponent] | None:
+    async def resolve_forward(self, forward_id: str, depth: int = 0) -> list[EnhancedComponent] | None:
         """通过 OneBot API get_forward_msg 展开转发消息。"""
         call_action = self._event.bot.api.call_action
         try:
@@ -114,7 +114,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         for msg in messages_data:
             sender = msg.get("sender", {})
             segments = msg.get("message", [])
-            inner_chain = await self._onebot_segments_to_chain(segments)
+            inner_chain = await self._onebot_segments_to_chain(segments, depth + 1)
             node = EnhancedNode(
                 sender_id=str(sender.get("user_id", "")),
                 sender_name=sender.get("nickname", ""),
@@ -243,7 +243,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         content = data.get("content", [])
         summary = self._parse_forward_summary() if depth == 0 else None
         if not content:
-            messages = await self.resolve_forward(forward_id)
+            messages = await self.resolve_forward(forward_id, depth)
             return EnhancedForward(id=forward_id, summary=summary, messages=messages)
         node_list: list[EnhancedComponent] = []
         for node_data in content:
