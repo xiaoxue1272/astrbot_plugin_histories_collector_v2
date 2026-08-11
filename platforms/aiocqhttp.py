@@ -75,18 +75,21 @@ class AiocqhttpPlatformHelper(PlatformHelper):
     # ── 发送者 ──
 
     async def get_sender(self) -> dict:
-        """从 OneBot raw 数据中提取发送者信息（含昵称）。"""
+        """从 OneBot raw 数据中提取发送者信息（含昵称）。
+
+        OneBot sender 字段映射：
+          - user_id → ES sender.id
+          - nickname → ES sender.name（QQ 昵称，全局）
+          - card     → ES sender.nickname（群名片/群昵称，仅群聊）
+        """
         raw = self._event.message_obj.raw_message
         sender = getattr(raw, "sender", None) if raw else None
         if isinstance(sender, dict):
-            sender_doc = {
+            return {
                 "id": sender.get("user_id", ""),
                 "name": sender.get("nickname", ""),
+                "nickname": sender.get("card", "")
             }
-            nickname = sender.get("card", "")
-            if nickname is not None and nickname is not "":
-                sender_doc["nickname"] = nickname
-        
         return await super().get_sender()
 
 

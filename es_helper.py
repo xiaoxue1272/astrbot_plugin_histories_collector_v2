@@ -10,6 +10,8 @@ from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 class ESHelper:
     """Elasticsearch 操作：索引生命周期、模板管理和消息持久化。"""
 
+    _es_client: AsyncElasticsearch
+
     _MAX_SAVE_RETRIES = 3
     _RETRY_BASE_DELAY = 1.0
 
@@ -27,7 +29,6 @@ class ESHelper:
 
     def __init__(self, config: ESConfig):
         self._config = config
-        self._es_client: AsyncElasticsearch | None = None
         self._alias = config.alias
         self._ilm_policy_name = f"{self._alias}-policy"
         self._use_ik = config.use_ik_analyzer
@@ -103,14 +104,14 @@ class ESHelper:
                     "type": "nested",
                     "properties": {
                         "id": {"type": "keyword"},
-                        "name": {"type": "text"},
+                        "name": {"type": "keyword"},
                     },
                 },
                 "sender": {
                     "type": "nested",
                     "properties": {
                         "id": {"type": "keyword"},
-                        "name": {"type": "text"},
+                        "name": {"type": "keyword"},
                         "nickname": {"type": "keyword"},
                     },
                 },
@@ -213,7 +214,7 @@ class ESHelper:
         """
         if not self._es_client:
             logger.warning("ES 客户端不可用，跳过消息保存。")
-            return
+            return None
 
         async def _do_save():
             response = await self._es_client.create(

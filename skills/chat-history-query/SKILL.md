@@ -11,41 +11,31 @@ description: >
 
 `search_es(body)`
 
-- `body` — 标准 ES `_search` 请求体，直接透传给 ES。
-- **务必在 body 中显式指定 `size`**。概览类查询建议 `100`，含 `messages` 的详细查询建议 `20~50`。
+- `body` — 标准 ES `_search` 请求体，直接透传给 ES。所有 ES `_search` API 参数（`query`、`sort`、`aggs`、`size`、`_source`、`track_total_hits` 等）均放 body 顶层。
+- **务必显式指定 `size`**。概览类查询建议 `100`，含 `messages` 的详细查询建议 `20~50`。
+- **务必使用 `_source` 控制返回字段**，节省 token。`messages` 字段数据量极大，仅在需要查看具体消息内容或按消息内字段搜索时才包含。概览类查询用 `["@timestamp", "summary", "sender", "group"]` 即可。
 - 返回原始 ES 搜索结果 JSON。
-- **群聊限定**：工具代码层自动按当前群 ID 过滤，**不要在 body 里手动加 `group.id` 或 `group.name` 过滤**，否则会导致双重过滤。
-- **务必使用 `_source` 控制返回字段，节省 token**（见下方决策规则）。
 
-### `_source` 决策规则
+### 群过滤规则
 
-`messages` 字段包含完整消息链（嵌套结构），数据量极大。根据用户意图决定是否包含：
+- **群聊场景**：工具代码层自动按当前群 ID 过滤，**不要在 body 里手动加 group 过滤**，否则会导致双重过滤。
+- **私聊场景**：不会自动过滤。如果用户指定了群名或群号，需在 body 中自行添加 `group.name` 或 `group.id` 过滤：
+  ```json
+  {"query": {"nested": {"path": "group", "query": {"match": {"group.name": "xxx", "group.id": "123456789"}}}}}
+  ```
 
-| 用户意图 | `_source` 写法 | 原因 |
-|---------|---------------|------|
-| 了解最近在聊什么、话题概览 | `["@timestamp", "summary", "sender", "group"]` | `summary` 已概括每条消息的内容 |
-| 查看具体说了什么、原文 | 加上 `"messages"` | 需要查看完整消息细节 |
-| 查找图片/视频/语音/文件/@/回复 | 加上 `"messages"` | 媒体类型信息在 `messages` 内 |
-| 按消息类型搜索 | 加上 `"messages"` | 查询字段在 `messages` 内，结果也需要返回 |
-| 统计/聚合 | 不需要 `_source`（`size: 0`） | 聚合不返回 hits |
+## 大数据量总结策略
 
-> **原则**：能满足用户需求的最小字段集。不确定时先不加 `messages`，后续可按需再查。
+当数据量很大（数千条以上）时，不要仅靠采样 `hits` 来做总结。优先使用 ES 聚合在服务端完成统计，再对聚合结果做归纳：
 
-## Body 结构
+1. **获取精确总数**：设置 `"track_total_hits": true`（ES 默认上限 10000）
+2. **消息量趋势**：`date_histogram` 聚合 `@timestamp`，按天/小时统计
+3. **高频关键词**：`significant_terms` 聚合 `summary` 字段
+4. **活跃用户排名**：nested terms 聚合 `sender.name`，`size` 设 20~50
+5. **消息类型分布**：nested terms 聚合 `messages.type`
+6. **分时段抽样**：对每个时段用 `top_hits` + `_source` 取少量代表性消息（每个 bucket 取 3~5 条即可）
 
-所有字段均为 body **顶层平级**，不可互相嵌套：
-
-```json
-{
-  "query": { ... },
-  "sort": [ ... ],
-  "aggs": { ... },
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-> `track_total_hits` 等 ES `_search` API 参数同理，直接放 body 顶层。
+原则：让 ES 做统计，LLM 做归纳。不要试图把几千条消息拉回客户端再分析。
 
 ## 索引结构
 
@@ -53,245 +43,54 @@ description: >
 
 | 字段 | 类型 | 说明 |
 |-------|------|------|
-| `@timestamp` | `date` | 接受 `"2026-07-10"` 字符串格式 |
-| `platform` | `keyword` | 支持：`aiocqhttp`、`wecom` |
+| `@timestamp` | `date` | 毫秒时间戳，也接受 `"2026-07-10"` 字符串格式 |
+| `platform` | `keyword` | 平台类型，如 `aiocqhttp`、`wecom` |
 | `platform_id` | `keyword` | 平台实例 ID |
 | `message_id` | `keyword` | 消息 ID |
-| `summary` | `text` | 消息文本摘要 |
-| `types` | `keyword` | 消息包含的组件类型列表（去重），可直接 `term` 查询 |
-| `group` | `nested` | `{id, name}` |
-| `sender` | `nested` | `{id, name, nickname}`（nickname 仅部分平台支持） |
+| `summary` | `text` | 消息文本摘要（已包含 @、图片、语音等占位描述） |
+| `types` | `keyword` | 消息包含的组件类型列表（去重），直接用 `term` 查询，无需 nested |
+| `group` | `nested` | `{id(keyword), name(text)}` |
+| `sender` | `nested` | `{id(keyword), name(keyword), nickname(keyword)}` |
 | `messages` | `nested` | 解析后的消息链，见下表 |
+
+### sender 字段说明
+
+| 字段 | 含义 | 展示优先级 |
+|------|------|-----------|
+| `sender.name` | 用户全局昵称 | 兜底 |
+| `sender.nickname` | 群昵称/群名片（仅部分平台支持） | **优先展示** |
+
+> 展示发送者时优先用 `nickname`，不存在时回退到 `name`。
 
 ### `messages` 子字段
 
-每条消息由 `type` 和对应字段组成，可递归嵌套（如 `Forward` → `messages[]` → `Node` → `messages[]`）：
+每条消息由 `type` 和对应字段组成，可递归嵌套（如 `forward` → `messages[]` → `node` → `messages[]`）：
 
 | `type` | 有效字段 |
 |--------|---------|
-| `plain` | `text` |
-| `image` | `url`, `path`, `sub_type`, `summary` |
-| `video` | `url`, `path` |
-| `record` | `url`, `path`, `text` |
-| `file` | `url`, `path` |
-| `at` | `qq` |
-| `reply` | `id`, `summary` |
+| `text` | `text` |
+| `image` | `url`, `path`, `warn` |
+| `sticker` | `url`, `path`, `summary`, `warn` |
+| `video` | `url`, `path`, `warn` |
+| `voice` | `url`, `path`, `text`, `warn` |
+| `file` | `url`, `path`, `name`, `warn` |
+| `mention` | `id`, `name` |
+| `mention_all` | （无字段） |
+| `reply` | `id`, `messages[]`, `sender_id`, `sender_name`, `sender_nickname`, `time` |
 | `face` | `id` |
 | `json` | `data` |
-| `forward` | `id`, `messages[]` |
-| `nodes` | `messages[]` |
-| `node` | `user_id`, `nickname`, `messages[]` |
+| `forward` | `id`, `summary`, `messages[]` |
+| `nodes` | `summary`, `messages[]` |
+| `node` | `sender`（`{id, name, nickname}`）, `messages[]`, `time` |
+| `share` | `url`, `title`, `content`, `image` |
+| `music` | `source`, `id`, `url`, `audio`, `title`, `content`, `image` |
 
+> `warn`：媒体文件下载/缓存失败时的警告信息，仅在出错时出现。
+> `summary` 在 `forward`/`nodes`/`sticker` 中为可选摘要文本。
 
-## 查询示例
+## 注意事项
 
-### 查询模式速查
-
-| 场景 | 查询方式 |
-|------|---------|
-| 文本搜索 | `{"match": {"summary": "搜索词"}}` |
-| 精确匹配 | `{"term": {"platform": "aiocqhttp"}}` |
-| 按消息类型 | `{"term": {"types": "image"}}` — 用顶层 `types` 字段，比 nested 更高效 |
-| Nested 搜索 | `{"nested": {"path": "sender", "query": {"match": {"sender.name": "xxx"}}}}` |
-| 时间范围 | `{"range": {"@timestamp": {"gte": "2026-07-01", "lte": "2026-07-10"}}}` |
-| bool 组合 | `{"bool": {"must": [...], "filter": [...], "should": [...]}}` |
-| 排序 | `"sort": [{"@timestamp": "desc"}]` — **放在 body 顶层** |
-
-### 关键词搜索
-
-同时搜索 `summary` 和 `messages.text`，需要包含 `messages` 字段：
-
-```json
-{
-  "query": {
-    "bool": {
-      "should": [
-        {"match": {"summary": "关键词"}},
-        {"nested": {"path": "messages", "query": {"match": {"messages.text": "关键词"}}}}
-      ]
-    }
-  },
-  "sort": [{"@timestamp": "desc"}],
-  "size": 50,
-  "_source": ["@timestamp", "summary", "sender", "group", "messages"]
-}
-```
-
-### 按发送者过滤
-
-模糊昵称：`nested` + `match` 匹配 `sender.nickname`
-
-```json
-{
-  "query": {
-    "nested": {"path": "sender", "query": {"match": {"sender.nickname": "昵称"}}}
-  },
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-精确 ID：`nested` + `term` 匹配 `sender.id`
-
-```json
-{
-  "query": {
-    "nested": {"path": "sender", "query": {"term": {"sender.id": "123456789"}}}
-  },
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-> `sender.name` 同理，用 `match`/`term` 均可。
-
-### 按平台 / 消息 ID 过滤
-
-```json
-{"query": {"term": {"platform": "aiocqhttp"}}, "size": 100, "_source": ["@timestamp", "summary", "sender", "group"]}
-```
-
-```json
-{"query": {"term": {"platform_id": "NapCatQQ"}}, "size": 100, "_source": ["@timestamp", "summary", "sender", "group"]}
-```
-
-```json
-{"query": {"term": {"message_id": "msg_id"}}, "size": 50, "_source": ["@timestamp", "summary", "sender", "group", "messages"]}
-```
-
-### 按群名过滤
-
-> 仅私聊场景使用。群聊中工具已自动限定当前群，**勿加此过滤**。
-
-```json
-{
-  "query": {
-    "nested": {"path": "group", "query": {"match": {"group.name": "群名称"}}}
-  },
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-### 时间范围
-
-```json
-{
-  "query": {
-    "bool": {
-      "filter": [{"range": {"@timestamp": {"gte": "2026-07-01", "lte": "2026-07-10"}}}]
-    }
-  },
-  "sort": [{"@timestamp": "desc"}],
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-### 按消息类型搜索
-
-**推荐用顶层 `types` 字段**（无需 nested，性能更好）：
-
-```json
-{
-  "query": {"term": {"types": "image"}},
-  "sort": [{"@timestamp": "desc"}],
-  "size": 50,
-  "_source": ["@timestamp", "summary", "sender", "group", "messages"]
-}
-```
-
-如需在 `messages` 内部嵌套搜索（如 Forward 子消息），用 nested：
-
-```json
-{
-  "query": {
-    "nested": {"path": "messages", "query": {"term": {"messages.type": "image"}}}
-  },
-  "sort": [{"@timestamp": "desc"}],
-  "size": 50,
-  "_source": ["@timestamp", "summary", "sender", "group", "messages"]
-}
-```
-
-支持的 type：`plain`、`image`、`video`、`record`、`file`、`at`、`reply`、`forward`、`face`、`json`、`nodes`、`node`。
-
-> 如需同时匹配多个 type，用 `bool` + `should`：
-> ```json
-> {
->   "nested": {
->     "path": "messages",
->     "query": {"bool": {"should": [
->       {"term": {"messages.type": "image"}},
->       {"term": {"messages.type": "video"}}
->     ]}}
->   }
-> }
-> ```
-
-### 组合查询：关键词 + 发送者 + 时间
-
-```json
-{
-  "query": {
-    "bool": {
-      "must": [{"match": {"summary": "关键词"}}],
-      "filter": [
-        {"range": {"@timestamp": {"gte": "2026-07-01"}}},
-        {"nested": {"path": "sender", "query": {"term": {"sender.id": "123456789"}}}}
-      ]
-    }
-  },
-  "sort": [{"@timestamp": "desc"}],
-  "size": 100,
-  "_source": ["@timestamp", "summary", "sender", "group"]
-}
-```
-
-### 聚合统计：按消息类型计数
-
-```json
-{
-  "size": 0,
-  "query": {"range": {"@timestamp": {"gte": "2026-07-01"}}},
-  "aggs": {
-    "by_type": {
-      "nested": {"path": "messages"},
-      "aggs": {
-        "types": {"terms": {"field": "messages.type", "size": 50}}
-      }
-    }
-  }
-}
-```
-
-### 聚合统计：每日消息数
-
-```json
-{
-  "size": 0,
-  "query": {"range": {"@timestamp": {"gte": "2026-07-01"}}},
-  "aggs": {
-    "daily": {
-      "date_histogram": {"field": "@timestamp", "calendar_interval": "day"}
-    }
-  }
-}
-```
-
-### 聚合统计：按发送者消息数
-
-```json
-{
-  "size": 0,
-  "query": {"range": {"@timestamp": {"gte": "2026-07-01"}}},
-  "aggs": {
-    "by_sender": {
-      "nested": {"path": "sender"},
-      "aggs": {
-        "senders": {"terms": {"field": "sender.nickname", "size": 50}}
-      }
-    }
-  }
-}
-```
+- `types` 是顶层 `keyword` 数组，用 `term` 查询无需 nested，比在 `messages` 内部搜索高效得多。优先使用。
+- `group`、`sender`、`messages` 均为 `nested` 类型，查询时需用 `nested` query 包裹。
+- `sender.name` 和 `sender.nickname` 均为 `keyword` 类型，可直接用于 `term` 查询和 `terms` 聚合。
+- 聚合统计时设置 `"size": 0`，不需要 `_source`。
