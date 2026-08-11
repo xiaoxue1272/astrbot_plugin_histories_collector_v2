@@ -324,7 +324,8 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             result = await async_retry(
                 lambda: call_action("get_msg", message_id=message_id),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"get_msg({message_id}) 异常: {e}")
             return None
         return result if isinstance(result, dict) else None
 
@@ -335,13 +336,11 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             result = await async_retry(
                 lambda: call_action("fetch_ptt_text", message_id=message_id),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"fetch_ptt_text({message_id}) 异常: {e}")
             return None
         if isinstance(result, dict):
-            text = result.get("text")
-            if text:
-                logger.debug(f"语音转文字成功: {text}")
-            return text
+            return result.get("text")
         return None
 
     async def get_group_member_name(self, user_id: str | None = None) -> str | None:
@@ -357,7 +356,8 @@ class AiocqhttpPlatformHelper(PlatformHelper):
                     user_id=user_id,
                 ),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"get_group_member_info({user_id}) 异常: {e}")
             return None
         if isinstance(result, dict):
             return result.get("card") or result.get("nickname") or ""
@@ -372,8 +372,9 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             result = await async_retry(
                 lambda: call_action("get_stranger_info", user_id=user_id),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"get_stranger_info({user_id}) 异常: {e}")
             return None
         if isinstance(result, dict):
-            return result.get("nickname") or ""
+            return result.get("nickname")
         return None
