@@ -123,7 +123,9 @@ class HistoriesCollectorV2Plugin(Star):
         try:
             await self.es_helper.save_message(next(self.id_generator), doc)
         except Exception as e:
-            logger.error(f"ES 保存消息失败，消息已丢弃: {e}")
+            logger.error(
+                f"ES 保存消息失败，消息已丢弃: message_id={event.message_obj.message_id}, {e}"
+            )
 
     async def _build_document(self, event: AstrMessageEvent) -> dict | None:
         """Build ES document.

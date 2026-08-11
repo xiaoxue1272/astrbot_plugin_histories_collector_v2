@@ -239,7 +239,10 @@ class ESHelper:
                 delay=lambda attempt: self._RETRY_BASE_DELAY * (2 ** attempt),
             )
         except Exception as e:
-            logger.warning(f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: {e}")
+            logger.warning(
+                f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: "
+                f"doc_id={doc_id}, message_id={doc_body.get('message_id')}, {e}"
+            )
             raise
 
     async def search(self, body: dict) -> Any:

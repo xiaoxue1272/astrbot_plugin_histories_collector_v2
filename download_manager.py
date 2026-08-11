@@ -62,7 +62,7 @@ class DownloadManager:
             async with self._http_session.get(url, timeout=10) as resp:
                 content_length = resp.headers.get("Content-Length")
                 if content_length and int(content_length) > self.max_file_size_bytes:
-                    logger.info(f"文件超出大小限制 ({content_length} 字节)，跳过: {url[:80]}")
+                    logger.debug(f"文件超出大小限制 ({content_length} 字节)，跳过: {url[:80]}")
                     return f"文件超出 {self._max_file_size_mb}MB 限制 ({format_bytes_to_mb(int(content_length))})"
         except Exception as e:
             logger.warning(f"预检文件大小失败 ({url[:80]}): {e}")

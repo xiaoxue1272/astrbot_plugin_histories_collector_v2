@@ -103,15 +103,15 @@ class AiocqhttpPlatformHelper(PlatformHelper):
                 lambda: call_action("get_forward_msg", id=forward_id),
             )
         except Exception:
-            logger.info(f"转发消息 {forward_id}: 获取失败")
+            logger.warning(f"转发消息 {forward_id}: 获取失败")
             return None
         if not isinstance(forward_data, dict):
-            logger.info(f"转发消息 {forward_id}: 响应格式异常")
+            logger.warning(f"转发消息 {forward_id}: 响应格式异常")
             return None
 
         messages_data = forward_data.get("messages", [])
         if not messages_data:
-            logger.info(f"转发消息 {forward_id}: 无消息内容")
+            logger.warning(f"转发消息 {forward_id}: 无消息内容")
             return None
 
         logger.debug(f"转发消息 {forward_id} 已解析，共 {len(messages_data)} 条消息")
