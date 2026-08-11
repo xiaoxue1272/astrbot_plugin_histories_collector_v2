@@ -142,6 +142,8 @@ class HistoriesCollectorV2Plugin(Star):
         raw = event.message_obj.raw_message
         if not raw:
             return None
+        if getattr(raw, "post_type", "").lower() == "notice":
+            return None
 
         helper = create_platform_helper(event, self.collector_config, self.download_manager)
 
