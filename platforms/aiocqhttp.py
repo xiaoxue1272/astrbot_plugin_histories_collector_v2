@@ -220,7 +220,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         return EnhancedMention(id=qq, name=name)
 
     async def _parse_reply(self, data: dict, depth: int = 0) -> EnhancedReply:
-        reply_id = str(data.get("id", ""))
+        reply_id = data.get("id", "")
         if depth >= self._config.max_nesting_depth:
             logger.debug(f"回复已达最大嵌套深度，截断: id={reply_id}")
             return EnhancedReply(id=reply_id)
@@ -237,7 +237,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
                 sender_nickname=sender.get("card", ""),
                 time=sender.get("timestamp"),
             )
-        logger.info(f"回复 {reply_id}: get_msg 失败，仅存 id")
+        logger.warning(f"回复 {reply_id}: get_msg 失败，仅存 id")
         return EnhancedReply(id=reply_id)
 
     async def _parse_forward(self, data: dict, depth: int = 0) -> EnhancedForward | EnhancedNodes:
