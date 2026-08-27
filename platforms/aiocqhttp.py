@@ -7,6 +7,7 @@
 import inspect
 import re
 import xml.etree.ElementTree as ET
+from typing import Any
 
 from astrbot.core.message.components import BaseMessageComponent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
@@ -215,9 +216,15 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         qq = str(data.get("qq", ""))
         if qq == "all":
             return EnhancedMentionAll()
-        name = (await self.get_group_member_name(qq)
-                or await self.get_stranger_name(qq))
-        return EnhancedMention(id=qq, name=name)
+        group_member = await self.get_group_member(qq)
+        name, nickname = "", ""
+        if group_member:
+            name = getattr(group_member, "nickname", "")
+            nickname = getattr(group_member, "card", "")
+        else:
+            stranger = await self.get_stranger(qq)
+            name = getattr(stranger, "nickname", "")
+        return EnhancedMention(id=qq, name=name, nickname=nickname)
 
     async def _parse_reply(self, data: dict, depth: int = 0) -> EnhancedReply:
         reply_id = data.get("id", "")
@@ -343,7 +350,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             return result.get("text")
         return None
 
-    async def get_group_member_name(self, user_id: str | None = None) -> str | None:
+    async def get_group_member(self, user_id: str | None = None) -> Any | None:
         """通过 get_group_member_info 获取群名片或昵称。"""
         if user_id is None:
             user_id = self._event.get_sender_id()
@@ -360,10 +367,10 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             logger.warning(f"get_group_member_info({user_id}) 异常: {e}")
             return None
         if isinstance(result, dict):
-            return result.get("card") or result.get("nickname") or ""
+            return result
         return None
 
-    async def get_stranger_name(self, user_id: str | None = None) -> str | None:
+    async def get_stranger(self, user_id: str | None = None) -> Any | None:
         """通过 get_stranger_info 获取 QQ 昵称。"""
         if user_id is None:
             user_id = self._event.get_sender_id()
@@ -376,5 +383,5 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             logger.warning(f"get_stranger_info({user_id}) 异常: {e}")
             return None
         if isinstance(result, dict):
-            return result.get("nickname")
+            return result
         return None

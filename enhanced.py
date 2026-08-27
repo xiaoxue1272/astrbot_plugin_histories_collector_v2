@@ -82,10 +82,14 @@ class EnhancedPlain(EnhancedComponent):
 
 class EnhancedMention(EnhancedComponent):
     type = "mention"
+    id: str | None
+    name: str | None
+    nickname: str | None
 
-    def __init__(self, id: str = "", name: str = ""):
+    def __init__(self, id: str | None = "", name: str | None = "", nickname: str | None = ""):
         self.id = id
         self.name = name
+        self.nickname = nickname
 
 
 # ---- @全体成员 ----

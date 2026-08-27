@@ -119,7 +119,11 @@ class PlatformHelper:
         if isinstance(component, At):
             if component.qq == "all":
                 return EnhancedMentionAll()
-            return EnhancedMention(id=str(component.qq), name=component.name or "")
+            return EnhancedMention(
+                id=str(component.qq),
+                name=component.name or "",
+                nickname=component.name or "",
+            )
         if isinstance(component, Image):
             return EnhancedImage(url=getattr(component, "url", ""))
         if isinstance(component, File):
