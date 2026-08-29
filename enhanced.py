@@ -54,7 +54,7 @@ class EnhancedComponent:
 
 # ---- 文本 ----
 
-class EnhancedDownloadableComponent(EnhancedComponent, ABC):
+class EnhancedDownloadable(EnhancedComponent, ABC):
     """可下载媒体组件的抽象基类。
 
     子类实现 download() 返回本地文件路径。
@@ -69,6 +69,14 @@ class EnhancedDownloadableComponent(EnhancedComponent, ABC):
         """下载媒体文件，返回本地临时文件路径。失败返回 None。"""
         ...
 
+class EnhancedMedia(EnhancedDownloadable, ABC):
+
+    media_type: str
+
+    async def download(self) -> str | None:
+        if not self.url:
+            return None
+        return await MediaResolver(self.url, media_type=self.media_type).to_path()
 
 class EnhancedPlain(EnhancedComponent):
     type = "text"
@@ -100,7 +108,7 @@ class EnhancedMentionAll(EnhancedComponent):
 
 # ---- 文件 ----
 
-class EnhancedFile(EnhancedDownloadableComponent):
+class EnhancedFile(EnhancedDownloadable):
     type = "file"
     name: str | None
 
@@ -131,61 +139,44 @@ class EnhancedFile(EnhancedDownloadableComponent):
 
 # ---- 图片 / 贴纸 ----
 
-class EnhancedImage(EnhancedDownloadableComponent):
+class EnhancedImage(EnhancedMedia):
     type = "image"
+    media_type = "image"
 
     def __init__(self, url: str | None = None):
         self.url = url
 
-    async def download(self) -> str | None:
-        from astrbot.core.utils.media_utils import MediaResolver
-        if not self.url:
-            return None
-        return await MediaResolver(self.url, media_type="image").to_path()
 
-
-class EnhancedSticker(EnhancedDownloadableComponent):
+class EnhancedSticker(EnhancedMedia):
     type = "sticker"
+    media_type = "image"
     summary: str | None
 
     def __init__(self, url: str | None = None, summary: str | None = None):
         self.url = url
         self.summary = summary
 
-    async def download(self) -> str | None:
-        if not self.url:
-            return None
-        return await MediaResolver(self.url, media_type="image").to_path()
-
 
 # ---- 视频 ----
 
-class EnhancedVideo(EnhancedDownloadableComponent):
+class EnhancedVideo(EnhancedMedia):
     type = "video"
+    media_type = "video"
 
     def __init__(self, url: str | None = None):
         self.url = url
 
-    async def download(self) -> str | None:
-        if not self.url:
-            return None
-        return await MediaResolver(self.url, media_type="video", default_suffix=".mp4").to_path()
-
 
 # ---- 语音 ----
 
-class EnhancedVoice(EnhancedDownloadableComponent):
+class EnhancedVoice(EnhancedMedia):
     type = "voice"
+    media_type = "audio"
     text: str | None
 
     def __init__(self, url: str | None = None, text: str | None = None):
         self.url = url
         self.text = text
-
-    async def download(self) -> str | None:
-        if not self.url:
-            return None
-        return await MediaResolver(self.url, media_type="audio", default_suffix=".wav").to_path(target_format="wav")
 
 
 # ---- 引用回复 ----

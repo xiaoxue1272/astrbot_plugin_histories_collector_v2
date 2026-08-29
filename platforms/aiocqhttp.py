@@ -29,7 +29,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedReply,
     EnhancedSticker,
     EnhancedVideo,
-    EnhancedVoice, EnhancedDownloadableComponent,
+    EnhancedVoice, EnhancedDownloadable,
 )
 from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import PlatformHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry

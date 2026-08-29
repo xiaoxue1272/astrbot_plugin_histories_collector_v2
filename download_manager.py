@@ -7,7 +7,7 @@ from pathlib import Path
 import aiohttp
 
 from astrbot.api import logger
-from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import EnhancedDownloadableComponent
+from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import EnhancedDownloadable
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import (
     format_bytes_to_mb,
     get_plugin_data_dir,
@@ -60,6 +60,7 @@ class DownloadManager:
         """
         try:
             async with self._http_session.get(url, timeout=10) as resp:
+                logger.debug(f"url={url} headers={dict(resp.headers)}")
                 content_length = resp.headers.get("Content-Length")
                 if content_length and int(content_length) > self.max_file_size_bytes:
                     logger.debug(f"文件超出大小限制 ({content_length} 字节)，跳过: {url[:80]}")
@@ -69,7 +70,7 @@ class DownloadManager:
             return "文件大小校验失败"
         return None
 
-    async def download_and_cache(self, comp: EnhancedDownloadableComponent):
+    async def download_and_cache(self, comp: EnhancedDownloadable):
         """下载媒体文件并缓存到本地存储，结果写入 comp.path / comp.warn。
 
         Args:
