@@ -14,7 +14,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.config import (
 )
 from data.plugins.astrbot_plugin_histories_collector_v2.es_helper import ESHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.group_filter import GroupFilter
-from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import build_summary
+from data.plugins.astrbot_plugin_histories_collector_v2.summary import build_summary
 from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import DownloadManager
 from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import (
     CollectorConfig,

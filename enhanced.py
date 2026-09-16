@@ -1,7 +1,4 @@
-from abc import ABC, abstractmethod
 from typing import Any
-
-from astrbot.core.utils.media_utils import MediaResolver
 
 
 class EnhancedSender:
@@ -54,29 +51,26 @@ class EnhancedComponent:
 
 # ---- 文本 ----
 
-class EnhancedDownloadable(EnhancedComponent, ABC):
-    """可下载媒体组件的抽象基类。
+class EnhancedDownloadable(EnhancedComponent):
+    """可下载媒体组件的标记基类，仅声明公共字段，不含下载行为。
 
-    子类实现 download() 返回本地文件路径。
+    下载逻辑统一收敛在 ``DownloadManager``（download_manager.py）。
     """
 
     url: str | None
     path: str | None
     warn: str | None
 
-    @abstractmethod
-    async def download(self) -> str | None:
-        """下载媒体文件，返回本地临时文件路径。失败返回 None。"""
-        ...
 
-class EnhancedMedia(EnhancedDownloadable, ABC):
+class EnhancedMedia(EnhancedDownloadable):
+    """媒体组件的标记基类。
+
+    ``media_type`` 是供 ``DownloadManager`` 使用的元数据，决定调用
+    ``MediaResolver`` 时的类型（image/audio/video），组件本身不参与下载。
+    """
 
     media_type: str
 
-    async def download(self) -> str | None:
-        if not self.url:
-            return None
-        return await MediaResolver(self.url, media_type=self.media_type).to_path()
 
 class EnhancedPlain(EnhancedComponent):
     type = "text"
@@ -115,26 +109,6 @@ class EnhancedFile(EnhancedDownloadable):
     def __init__(self, name: str | None = None, url: str | None = None):
         self.name = name
         self.url = url
-
-    async def download(self) -> str | None:
-        """下载文件到本地临时目录，返回临时路径。"""
-        import uuid
-        from pathlib import Path
-
-        from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-        from astrbot.core.utils.io import download_file
-
-        if not self.url:
-            return None
-        download_dir = Path(get_astrbot_temp_path())
-        download_dir.mkdir(parents=True, exist_ok=True)
-        if self.name:
-            filename = self.name
-        else:
-            filename = f"fileseg_{uuid.uuid4().hex}"
-        file_path = download_dir / filename
-        await download_file(self.url, str(file_path))
-        return str(file_path.resolve())
 
 
 # ---- 图片 / 贴纸 ----
@@ -311,60 +285,3 @@ class EnhancedMusic(EnhancedComponent):
         self.title = title
         self.content = content
         self.image = image
-
-
-def build_summary(chain: list[EnhancedComponent]) -> str:
-    """将 Enhanced 消息链构建为可读摘要字符串。"""
-    parts: list[str] = []
-    for comp in chain:
-        if isinstance(comp, EnhancedPlain):
-            if comp.text:
-                parts.append(comp.text)
-        elif isinstance(comp, EnhancedImage):
-            parts.append("[图片]")
-        elif isinstance(comp, EnhancedSticker):
-            if comp.summary is not None:
-                parts.append(comp.summary)
-            else:
-                parts.append("[动画表情]")
-        elif isinstance(comp, EnhancedFace):
-            if comp.id is not None:
-                parts.append(f"[表情:{comp.id}]")
-            else:
-                parts.append("[表情]")
-        elif isinstance(comp, EnhancedMention):
-            parts.append(f"[@:{comp.name}]")
-        elif isinstance(comp, EnhancedMentionAll):
-            parts.append("[@全体成员]")
-        elif isinstance(comp, EnhancedReply):
-            reply_messages = [c for c in (comp.messages or []) if not isinstance(c, EnhancedReply)]
-            inner_summary = build_summary(reply_messages)
-            name = comp.sender_nickname if comp.sender_nickname else comp.sender_name
-            if name and inner_summary:
-                parts.append(f"[引用消息:({name}:{inner_summary})]")
-            else:
-                parts.append("[引用消息]")
-        elif isinstance(comp, EnhancedVoice):
-            if comp.text:
-                parts.append(f"[语音:({comp.text})]")
-            else:
-                parts.append("[语音]")
-        elif isinstance(comp, EnhancedVideo):
-            parts.append("[视频]")
-        elif isinstance(comp, EnhancedFile):
-            parts.append("[文件]")
-        elif isinstance(comp, EnhancedJson):
-            parts.append("[JSON]")
-        elif isinstance(comp, EnhancedMusic):
-            parts.append("[音乐]")
-        elif isinstance(comp, EnhancedShare):
-            parts.append("[分享]")
-        elif isinstance(comp, (EnhancedForward, EnhancedNodes)):
-            summary = getattr(comp, "summary", "")
-            if summary:
-                parts.append(f"[聊天记录:{summary}]")
-            else:
-                parts.append("[聊天记录]")
-        else:
-            parts.append(f"[{comp.type}]")
-    return " ".join(parts).strip()
