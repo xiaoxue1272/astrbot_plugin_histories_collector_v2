@@ -10,7 +10,7 @@ import aiohttp
 
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-from astrbot.core.utils.media_utils import MediaResolver
+from astrbot.core.utils.media_utils import MediaResolver, describe_media_ref
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedDownloadable,
     EnhancedFile,
@@ -76,7 +76,7 @@ class DownloadManager:
         try:
             temp_path, warning = await self._download(comp)
         except Exception as e:
-            logger.warning(f"下载失败: {e}, url={url[:80]}")
+            logger.warning(f"下载失败: {e}, type={comp.type}, url={describe_media_ref(url)}")
             comp.warn = "下载失败"
             return
 
@@ -95,7 +95,7 @@ class DownloadManager:
                     media_type=comp.media_type,
                 ).to_path()
             except Exception as e:
-                logger.warning(f"媒体处理失败: {e}, path={temp_path}")
+                logger.warning(f"媒体处理失败: {e}, type={comp.type}, path={temp_path}")
                 self._cleanup_temp(temp_path)
                 comp.warn = "媒体处理失败"
                 return
@@ -136,11 +136,10 @@ class DownloadManager:
             if not 200 <= resp.status < 300:
                 raise RuntimeError(f"下载返回错误状态码: {resp.status}")
 
-            logger.debug(f"url={url} headers={dict(resp.headers)}")
             content_type = resp.headers.get("Content-Type")
             content_length = resp.headers.get("Content-Length")
             if content_length and int(content_length) > max_bytes:
-                logger.debug(f"文件超出大小限制 ({content_length} 字节)，跳过: {url[:80]}")
+                logger.debug(f"文件超出大小限制，跳过: {describe_media_ref(url)}")
                 return None, (
                     f"文件超出 {self._max_file_size_mb}MB 限制 "
                     f"({format_bytes_to_mb(int(content_length))})"
@@ -174,6 +173,12 @@ class DownloadManager:
             self._cleanup_temp(str(temp_path))
             return None, f"文件超出 {self._max_file_size_mb}MB 限制"
 
+        if downloaded == 0:
+            self._cleanup_temp(str(temp_path))
+            logger.warning(f"下载内容为空: type={comp.type}, url={describe_media_ref(url)}")
+            return None, "下载内容为空"
+
+        logger.debug(f"下载完成: type={comp.type}, size={downloaded}B, suffix={temp_path.suffix}")
         return str(temp_path.resolve()), None
 
     @staticmethod
@@ -191,7 +196,10 @@ class DownloadManager:
         if content_type:
             mime = content_type.split(";")[0].strip().lower()
             guessed = mimetypes.guess_extension(mime)
-        return guessed or DownloadManager._EXT_FALLBACK.get(file_type, "")
+        suffix = guessed or DownloadManager._EXT_FALLBACK.get(file_type, "")
+        if not suffix:
+            logger.warning(f"无法确定文件后缀: type={file_type}, content_type={content_type}")
+        return suffix
 
     # ── 哈希 / 路径辅助 ──
 

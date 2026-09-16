@@ -113,17 +113,15 @@ class EnhancedFile(EnhancedDownloadable):
 
 # ---- 图片 / 贴纸 ----
 
-class EnhancedImage(EnhancedMedia):
+class EnhancedImage(EnhancedDownloadable):
     type = "image"
-    media_type = "image"
 
     def __init__(self, url: str | None = None):
         self.url = url
 
 
-class EnhancedSticker(EnhancedMedia):
+class EnhancedSticker(EnhancedDownloadable):
     type = "sticker"
-    media_type = "image"
     summary: str | None
 
     def __init__(self, url: str | None = None, summary: str | None = None):
