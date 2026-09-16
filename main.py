@@ -44,7 +44,7 @@ def _inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
     PLUGIN_NAME,
     "xiaoxue1272",
     "Astrbot 全平台群消息收集器V2(ES版)",
-    "v0.2.0",
+    "v0.2.1-SHAPSHOT",
 )
 class HistoriesCollectorV2Plugin(Star):
     """全平台群消息收集器，将消息结构化存入 Elasticsearch。
