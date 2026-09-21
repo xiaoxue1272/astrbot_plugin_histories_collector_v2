@@ -12,7 +12,6 @@ from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 from astrbot.core.utils.media_utils import MediaResolver, describe_media_ref
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
-    EnhancedDownloadable,
     EnhancedFile,
     EnhancedMedia,
 )
@@ -60,7 +59,7 @@ class DownloadManager:
 
     # ── 公共接口 ──
 
-    async def download_and_cache(self, comp: EnhancedDownloadable):
+    async def download_and_cache(self, comp: EnhancedFile):
         """下载媒体文件并缓存到本地存储，结果写入 comp.path / comp.warn。
 
         流程：单次请求下载（内含大小校验）→ 媒体类型再经 MediaResolver 加工 → 缓存入库。
@@ -104,15 +103,14 @@ class DownloadManager:
                 self._cleanup_temp(temp_path)
             temp_path = resolved_path
 
-        file_name = getattr(comp, "name", "") or ""
-        cached_path, warning = self._cache(temp_path, comp.type, file_name=file_name)
+        cached_path, warning = self._cache(temp_path, comp.type)
         if cached_path:
             comp.path = cached_path
             logger.debug(f"文件已缓存: type={comp.type}, path={cached_path}")
         if warning:
             comp.warn = warning
 
-    async def _download(self, comp: EnhancedDownloadable) -> tuple[str | None, str | None]:
+    async def _download(self, comp: EnhancedFile) -> tuple[str | None, str | None]:
         """单次 HTTP 请求内完成大小校验并下载到临时文件。
 
         由本管理器统一负责下载：既避免 MediaResolver 对 HTTP 图片硬编码 ".bin" 后缀，
@@ -145,13 +143,15 @@ class DownloadManager:
                     f"({format_bytes_to_mb(int(content_length))})"
                 )
 
-            file_name = getattr(comp, "name", "") or ""
-            if isinstance(comp, EnhancedFile) and file_name:
-                # 文件类型保留原始文件名
-                filename = self._sanitize_filename(file_name)
-            else:
-                suffix = self._pick_suffix(comp.type, content_type)
-                filename = f"{comp.type}_{uuid.uuid4().hex}{suffix}"
+            # 响应头带文件名时回填 name，用于推断后缀并记录到 ES
+            if not comp.name:
+                disposition = resp.content_disposition
+                if disposition and disposition.filename:
+                    comp.name = Path(disposition.filename.replace("\\", "/")).name
+
+            file_name = comp.name or ""
+            suffix = self._pick_suffix(comp.type, content_type, file_name)
+            filename = f"{comp.type}_{uuid.uuid4().hex}{suffix}"
 
             temp_path = temp_dir / filename
             downloaded = 0
@@ -182,16 +182,23 @@ class DownloadManager:
         return str(temp_path.resolve()), None
 
     @staticmethod
-    def _pick_suffix(file_type: str, content_type: str | None) -> str:
-        """决定临时文件后缀：优先 Content-Type，回退到类型默认后缀。
+    def _pick_suffix(file_type: str, content_type: str | None, name: str = "") -> str:
+        """决定文件后缀。
+
+        优先级：发送方提供的文件名后缀 → Content-Type → 类型默认后缀。
 
         Args:
             file_type: 组件类型（image/sticker/video/voice/file）。
             content_type: HTTP 响应头 Content-Type，可能为 None。
+            name: 发送方提供的文件名（平台数据或 Content-Disposition），可能为空。
 
         Returns:
             含点的后缀字符串，无法确定时返回空字符串。
         """
+        from_name = Path(name).suffix.lower() if name else ""
+        if from_name and len(from_name) <= 8:
+            return from_name
+
         guessed: str | None = None
         if content_type:
             mime = content_type.split(";")[0].strip().lower()
@@ -218,17 +225,11 @@ class DownloadManager:
             return suffix.lower()
         return DownloadManager._EXT_FALLBACK.get(file_type, "")
 
-    @staticmethod
-    def _sanitize_filename(name: str) -> str:
-        """移除文件系统不允许的字符。"""
-        return "".join(c for c in name if c not in r'<>:"/\|?*')
-
     def _build_store_path(
         self,
         file_type: str,
         content_hash: str = "",
         extension: str = "",
-        file_name: str = "",
     ) -> Path:
         sub_dir = self._store_dir / file_type
         if file_type == "sticker":
@@ -238,30 +239,20 @@ class DownloadManager:
             sub_dir = sub_dir / str(now.year) / f"{now.month:02d}"
         sub_dir.mkdir(parents=True, exist_ok=True)
 
-        if file_name:
-            safe_name = self._sanitize_filename(file_name)
-            return sub_dir / safe_name
-
         return sub_dir / f"{content_hash[:16]}{extension}"
 
     def _cache(
         self,
         temp_path: str,
         file_type: str,
-        file_name: str = "",
     ) -> tuple[str | None, str | None]:
-        """缓存本地文件到存储目录，返回 (相对路径, 警告信息)。"""
+        """缓存本地文件到存储目录，返回 (相对路径, 警告信息)。
+
+        所有类型统一以 ``{内容 hash 前 16 位}{后缀}`` 命名：
+        内容相同天然去重，内容不同不会互相覆盖。
+        """
         if not temp_path:
             return None, "下载失败"
-
-        if file_type == "file" and file_name:
-            dest = self._build_store_path(file_type, file_name=file_name)
-            if dest.exists():
-                self._cleanup_temp(temp_path)
-                return dest.relative_to(self._store_dir).as_posix(), None
-            shutil.copy(temp_path, dest)
-            self._cleanup_temp(temp_path)
-            return dest.relative_to(self._store_dir).as_posix(), None
 
         md5_hash = self._compute_hash(temp_path, "md5")
         extension = self._extract_extension(temp_path, file_type)

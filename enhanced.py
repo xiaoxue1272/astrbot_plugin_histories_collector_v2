@@ -49,28 +49,19 @@ class EnhancedComponent:
         return result
 
 
-# ---- 文本 ----
+# ---- 媒体 mixin ----
 
-class EnhancedDownloadable(EnhancedComponent):
-    """可下载媒体组件的标记基类，仅声明公共字段，不含下载行为。
+class EnhancedMedia:
+    """mixin：需要 MediaResolver 加工的组件（目前仅音频转码）。
 
-    下载逻辑统一收敛在 ``DownloadManager``（download_manager.py）。
-    """
-
-    url: str | None
-    path: str | None
-    warn: str | None
-
-
-class EnhancedMedia(EnhancedDownloadable):
-    """媒体组件的标记基类。
-
-    ``media_type`` 是供 ``DownloadManager`` 使用的元数据，决定调用
-    ``MediaResolver`` 时的类型（image/audio/video），组件本身不参与下载。
+    ``media_type`` 供 ``DownloadManager`` 决定调用 ``MediaResolver`` 的参数。
+    本类不继承任何基类，与 ``EnhancedFile`` 组合使用以避免钻石继承。
     """
 
     media_type: str
 
+
+# ---- 文本 ----
 
 class EnhancedPlain(EnhancedComponent):
     type = "text"
@@ -100,11 +91,21 @@ class EnhancedMentionAll(EnhancedComponent):
     type = "mention_all"
 
 
-# ---- 文件 ----
+# ---- 文件（可下载组件基类） ----
 
-class EnhancedFile(EnhancedDownloadable):
+class EnhancedFile(EnhancedComponent):
+    """可下载组件基类（含 file 类型本身）。
+
+    ``name`` 存放发送方提供的文件名（平台数据或 ``Content-Disposition``），
+    ``url`` / ``path`` / ``warn`` 为公共字段；
+    下载与命名逻辑统一收敛在 ``DownloadManager``（download_manager.py）。
+    """
+
     type = "file"
     name: str | None
+    url: str | None
+    path: str | None
+    warn: str | None
 
     def __init__(self, name: str | None = None, url: str | None = None):
         self.name = name
@@ -113,41 +114,34 @@ class EnhancedFile(EnhancedDownloadable):
 
 # ---- 图片 / 贴纸 ----
 
-class EnhancedImage(EnhancedDownloadable):
+class EnhancedImage(EnhancedFile):
     type = "image"
 
-    def __init__(self, url: str | None = None):
-        self.url = url
 
-
-class EnhancedSticker(EnhancedDownloadable):
+class EnhancedSticker(EnhancedFile):
     type = "sticker"
     summary: str | None
 
-    def __init__(self, url: str | None = None, summary: str | None = None):
-        self.url = url
+    def __init__(self, name: str | None = None, url: str | None = None, summary: str | None = None):
+        super().__init__(name=name, url=url)
         self.summary = summary
 
 
 # ---- 视频 ----
 
-class EnhancedVideo(EnhancedMedia):
+class EnhancedVideo(EnhancedFile):
     type = "video"
-    media_type = "video"
-
-    def __init__(self, url: str | None = None):
-        self.url = url
 
 
 # ---- 语音 ----
 
-class EnhancedVoice(EnhancedMedia):
+class EnhancedVoice(EnhancedFile, EnhancedMedia):
     type = "voice"
     media_type = "audio"
     text: str | None
 
-    def __init__(self, url: str | None = None, text: str | None = None):
-        self.url = url
+    def __init__(self, name: str | None = None, url: str | None = None, text: str | None = None):
+        super().__init__(name=name, url=url)
         self.text = text
 
 

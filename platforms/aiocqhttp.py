@@ -29,7 +29,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedReply,
     EnhancedSticker,
     EnhancedVideo,
-    EnhancedVoice, EnhancedDownloadable,
+    EnhancedVoice,
 )
 from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import PlatformHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
@@ -186,11 +186,12 @@ class AiocqhttpPlatformHelper(PlatformHelper):
     async def _parse_image(self, data: dict) -> EnhancedImage | EnhancedSticker:
         sub_type = int(data.get("sub_type", 0))
         url = data.get("url", "")
+        name = data.get("file", "")
         summary = data.get("summary") or None
         if sub_type != 0:
-            comp: EnhancedSticker = EnhancedSticker(url=url, summary=summary)
+            comp: EnhancedSticker = EnhancedSticker(url=url, name=name, summary=summary)
         else:
-            comp = EnhancedImage(url=url)
+            comp = EnhancedImage(url=url, name=name)
         await self._download_manager.download_and_cache(comp)
         return comp
 
@@ -198,12 +199,12 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         if not message_id:
             message_id = self._event.message_obj.message_id
         text = await self.fetch_record_text(message_id)
-        comp = EnhancedVoice(url=data.get("url", ""), text=text)
+        comp = EnhancedVoice(url=data.get("url", ""), name=data.get("file", ""), text=text)
         await self._download_manager.download_and_cache(comp)
         return comp
 
     async def _parse_video(self, data: dict) -> EnhancedVideo:
-        comp = EnhancedVideo(url=data.get("url", ""))
+        comp = EnhancedVideo(url=data.get("url", ""), name=data.get("file", ""))
         await self._download_manager.download_and_cache(comp)
         return comp
 

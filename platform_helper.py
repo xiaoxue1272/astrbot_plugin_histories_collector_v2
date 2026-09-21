@@ -127,7 +127,7 @@ class PlatformHelper:
         if isinstance(component, Image):
             return EnhancedImage(url=getattr(component, "url", ""))
         if isinstance(component, File):
-            return EnhancedFile(name=getattr(component, "name", ""), url=getattr(component, "url", ""))
+            return EnhancedFile(url=getattr(component, "url", ""))
         if isinstance(component, Video):
             return EnhancedVideo(url=getattr(component, "url", ""))
         if isinstance(component, Record):
