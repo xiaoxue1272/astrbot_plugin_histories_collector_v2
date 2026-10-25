@@ -16,16 +16,13 @@ class ESHelper:
     _RETRY_BASE_DELAY = 1.0
 
     _ILM_POLICY_BODY = {
-        "phases": {
-            "hot": {
-                "actions": {
-                    "rollover": {
-                        "max_size": "50gb"
-                    }
-                }
-            }
-        }
+        "phases": {"hot": {"actions": {"rollover": {"max_size": "50gb"}}}}
     }
+
+    # 索引模板优先级。V1 插件使用 message-histories-* 模式（默认优先级 0），
+    # 与 V2 的 message-histories-v2-* 模式重叠，同优先级会被 ES 拒绝，
+    # 因此显式设置更高优先级，让本模板在重叠匹配时生效。
+    _TEMPLATE_PRIORITY = 100
 
     def __init__(self, config: ESConfig):
         self._config = config
@@ -33,12 +30,6 @@ class ESHelper:
         self._ilm_policy_name = f"{self._alias}-policy"
         self._use_ik = config.use_ik_analyzer
         self._es_client: AsyncElasticsearch | None = None
-        self._ik_hint = (
-            "。若 ES 未安装 analysis-ik 分词插件，请在插件配置中关闭 "
-            "use_ik_analyzer，或为 ES 安装 IK 插件"
-            if self._use_ik
-            else ""
-        )
 
     @property
     def is_connected(self) -> bool:
@@ -160,19 +151,18 @@ class ESHelper:
         """创建或更新索引模板。
 
         Raises:
-            Exception: 模板创建失败时抛出，错误信息包含 IK 分词器排查提示。
+            Exception: 模板创建失败时原样抛出 ES 错误。
         """
         if not self._es_client:
             raise RuntimeError("ES 客户端不可用")
         template_name = f"{self._alias}-template"
         template_body = {
             "index_patterns": f"{self._alias}-*",
+            "priority": self._TEMPLATE_PRIORITY,
             "template": {
                 "settings": self._build_index_settings(),
                 "mappings": self._build_index_mappings(),
-                "aliases": {
-                    self._alias: {}
-                },
+                "aliases": {self._alias: {}},
             },
         }
         try:
@@ -182,8 +172,8 @@ class ESHelper:
             )
             logger.info(f"索引模板 '{template_name}' 已创建/更新。")
         except Exception as e:
-            logger.error(f"索引模板创建失败: {e}{self._ik_hint}")
-            raise RuntimeError(f"索引模板创建失败: {e}{self._ik_hint}") from e
+            logger.error(f"索引模板创建失败: {e}")
+            raise
 
     async def _ensure_write_index_exists(self):
         """确保可写初始索引存在并绑定到别名。
@@ -191,7 +181,7 @@ class ESHelper:
         启用 IK 分词器时，ES 必须安装 analysis-ik 插件，否则直接失败。
 
         Raises:
-            Exception: 索引创建失败时抛出，错误信息包含 IK 分词器排查提示。
+            Exception: 索引创建失败时原样抛出 ES 错误。
         """
         if not self._es_client:
             raise RuntimeError("ES 客户端不可用")
@@ -199,8 +189,7 @@ class ESHelper:
             alias_info = await self._es_client.indices.get_alias(name=self._alias)
             if alias_info:
                 logger.info(
-                    f"写入别名 '{self._alias}' 已指向: "
-                    f"{list(alias_info.keys())}"
+                    f"写入别名 '{self._alias}' 已指向: {list(alias_info.keys())}"
                 )
                 return
         except NotFoundError:
@@ -224,12 +213,11 @@ class ESHelper:
                 body=initial_index_body,
             )
             logger.info(
-                f"已创建初始索引 '{initial_index_name}'，"
-                f"写入别名 '{self._alias}'。"
+                f"已创建初始索引 '{initial_index_name}'，写入别名 '{self._alias}'。"
             )
         except Exception as e:
-            logger.error(f"创建初始索引失败: {e}{self._ik_hint}")
-            raise RuntimeError(f"创建初始索引失败: {e}{self._ik_hint}") from e
+            logger.error(f"创建初始索引失败: {e}")
+            raise
 
     async def save_message(self, doc_id: str, doc_body: dict):
         """保存消息文档到 ES，带指数退避重试。
@@ -260,21 +248,18 @@ class ESHelper:
             if result in ("created", "updated"):
                 return response
             raise Exception(
-                f"ES 写入返回异常结果: {result}\n"
-                f"响应: {response}\n"
-                f"文档: {doc_body}"
+                f"ES 写入返回异常结果: {result}\n响应: {response}\n文档: {doc_body}"
             )
 
         try:
             return await async_retry(
                 _do_save,
                 max_retries=self._MAX_SAVE_RETRIES,
-                delay=lambda attempt: self._RETRY_BASE_DELAY * (2 ** attempt),
+                delay=lambda attempt: self._RETRY_BASE_DELAY * (2**attempt),
             )
         except Exception as e:
             logger.warning(
-                f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: "
-                f"doc_id={doc_id}, {e}"
+                f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: doc_id={doc_id}, {e}"
             )
             raise
 
