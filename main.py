@@ -1,50 +1,35 @@
-import json
+import time
 
 from snowflake import SnowflakeGenerator
 
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core import AstrBotConfig
-
-from astrbot.api import logger
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from astrbot.core.star.filter.platform_adapter_type import PlatformAdapterType
 from data.plugins.astrbot_plugin_histories_collector_v2.config import (
     HistoriesCollectorConfig,
 )
+from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import (
+    DownloadManager,
+)
 from data.plugins.astrbot_plugin_histories_collector_v2.es_helper import ESHelper
 from data.plugins.astrbot_plugin_histories_collector_v2.group_filter import GroupFilter
-from data.plugins.astrbot_plugin_histories_collector_v2.summary import build_summary
-from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import DownloadManager
 from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import (
     CollectorConfig,
     create_platform_helper,
 )
+from data.plugins.astrbot_plugin_histories_collector_v2.search_tool import SearchEsTool
+from data.plugins.astrbot_plugin_histories_collector_v2.summary import build_summary
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import PLUGIN_NAME
-
-def _inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
-    """Auto-scope query to current group when triggered from a group message."""
-    group_id: str | None = None
-    try:
-        group_id = event.get_group_id()
-    except (AttributeError, TypeError):
-        return
-    if not group_id:
-        return
-    group_filter = {"nested": {"path": "group", "query": {"term": {"group.id": group_id}}}}
-    if "query" not in body:
-        body["query"] = group_filter
-    elif "bool" in body["query"]:
-        body["query"]["bool"].setdefault("filter", []).append(group_filter)
-    else:
-        body["query"] = {"bool": {"must": [body["query"]], "filter": [group_filter]}}
 
 
 @register(
     PLUGIN_NAME,
     "xiaoxue1272",
     "Astrbot 全平台群消息收集器V2(ES版)",
-    "v0.2.1",
+    "v0.3.0-SNAPSHOT",
 )
 class HistoriesCollectorV2Plugin(Star):
     """全平台群消息收集器，将消息结构化存入 Elasticsearch。
@@ -59,25 +44,6 @@ class HistoriesCollectorV2Plugin(Star):
     collector_config: CollectorConfig
     download_manager: DownloadManager
 
-    @filter.llm_tool(name="search_es")
-    async def search_es(self, event: AstrMessageEvent, body: dict) -> str:
-        """查询群聊历史消息记录。body 为 ES 原生搜索 body，可按需包含 query/sort/aggs/size/from/_source 等字段。
-
-        Args:
-            body(object): 标准 ES _search 请求 body，所有字段直接透传给 ES。索引固定为 message-histories-v2。群聊自动限定当前群。
-        """
-        if not self.es_helper or not self.es_helper.is_connected:
-            return json.dumps({"error": "ES 未连接"}, ensure_ascii=False)
-
-        body = body or {}
-        _inject_group_filter(body, event)
-
-        try:
-            resp = await self.es_helper.search(body)
-        except Exception as e:
-            return json.dumps({"error": f"ES 查询失败: {e}"}, ensure_ascii=False)
-        return json.dumps(resp, ensure_ascii=False, default=str)
-
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.config = HistoriesCollectorConfig(config)
@@ -87,6 +53,12 @@ class HistoriesCollectorV2Plugin(Star):
         self.es_helper = None
         self.collector_config = None
         self.download_manager = None
+
+        # ESHelper 先构造（不连接）并注入 LLM 工具，连接在 initialize 中建立。
+        # 工具在此注册：add_llm_tools 会自动解析归属模块路径，且早于
+        # star_manager 绑定循环，激活/停用/卸载由框架统一管理。
+        self.es_helper = ESHelper(self.config.es_config)
+        self.context.add_llm_tools(SearchEsTool(es_helper=self.es_helper))
 
     async def initialize(self) -> None:
         """连接 Elasticsearch 并初始化索引。"""
@@ -100,8 +72,9 @@ class HistoriesCollectorV2Plugin(Star):
         )
 
         self.group_filter = GroupFilter(self.config.group_filter)
-        self.es_helper = ESHelper(self.config.es_config)
+        # es_helper 已在 __init__ 创建并注册给 LLM 工具，这里只建立连接
         await self.es_helper.initialize()
+
         logger.info("HistoriesCollectorV2 插件初始化完成。")
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
@@ -125,15 +98,10 @@ class HistoriesCollectorV2Plugin(Star):
         if doc is None:
             return
 
-        # 稳定文档 ID：同一平台实例、同一群、同一消息只保留一条记录。
-        # message_id 不再写入 _source，仅用于生成去重 ID；缺失时回退 Snowflake。
-        message_id = event.message_obj.message_id
-        if message_id:
-            platform_id = doc.get("platform_id") or ""
-            doc_group_id = (doc.get("group") or {}).get("id") or ""
-            doc_id = f"{platform_id}:{doc_group_id}:{message_id}"
-        else:
-            doc_id = str(next(self.id_generator))
+        # 文档 ID 使用 Snowflake，每次收集生成唯一 ID。
+        # 注意：同一条消息被多个平台实例收到或重放时会写入多条文档，
+        # 去重依赖 _source 中的 message_id + platform_id + group.id 组合查询。
+        doc_id = str(next(self.id_generator))
 
         try:
             await self.es_helper.save_message(doc_id, doc)
@@ -141,6 +109,67 @@ class HistoriesCollectorV2Plugin(Star):
             logger.error(
                 f"ES 保存消息失败，消息已丢弃: message_id={event.message_obj.message_id}, {e}"
             )
+
+    @filter.after_message_sent()
+    async def on_bot_message_sent(self, event: AstrMessageEvent):
+        """收集机器人自己发送到群聊的消息。
+
+        OneBot 不会把机器人自己发出的消息作为群消息事件回推，因此通过
+        发送完成钩子获取实际发出的消息链，单独写入 ES。媒体按现有流程
+        同步下载，发送后可能有短暂延迟。
+
+        Args:
+            event: 当前消息事件（回复阶段的事件，结果尚未被清空）。
+        """
+        if not self.config.collect_bot_message:
+            return
+        if not self.es_helper or not self.es_helper.is_connected:
+            return
+        if event.is_private_chat():
+            return
+
+        platform_name = event.get_platform_name()
+        group_id = event.get_group_id()
+        if not group_id or not self.group_filter.should_collect(
+            platform_name, group_id
+        ):
+            return
+
+        result = event.get_result()
+        chain = getattr(result, "chain", None) if result else None
+        if not chain:
+            return
+
+        helper = create_platform_helper(
+            event, self.collector_config, self.download_manager
+        )
+        # 复用 PlatformHelper 的组件转换逻辑（含媒体下载与缓存）
+        enhanced = []
+        for comp in chain:
+            converted = await helper._convert(comp)
+            if converted is not None:
+                enhanced.append(converted)
+        if not enhanced:
+            return
+
+        self_id = str(event.get_self_id() or "")
+        doc = {
+            "@timestamp": int(time.time() * 1000),
+            "platform": platform_name.strip(),
+            "platform_id": event.get_platform_id().strip(),
+            # 机器人自己发送的消息拿不到平台 msgId，留空字符串
+            "message_id": "",
+            "group": await helper.get_group(),
+            "sender": {"id": self_id, "name": self_id, "nickname": ""},
+            "summary": build_summary(enhanced),
+            "types": list(dict.fromkeys(comp.type for comp in enhanced)),
+            "messages": [comp.to_dict() for comp in enhanced],
+        }
+
+        try:
+            await self.es_helper.save_message(str(next(self.id_generator)), doc)
+        except Exception as e:
+            logger.error(f"ES 保存机器人消息失败: {e}")
 
     async def _build_document(self, event: AstrMessageEvent) -> dict | None:
         """Build ES document.
@@ -160,7 +189,9 @@ class HistoriesCollectorV2Plugin(Star):
         if getattr(raw, "post_type", "").lower() == "notice":
             return None
 
-        helper = create_platform_helper(event, self.collector_config, self.download_manager)
+        helper = create_platform_helper(
+            event, self.collector_config, self.download_manager
+        )
 
         group_doc = await helper.get_group()
         sender_doc = await helper.get_sender()
@@ -175,6 +206,7 @@ class HistoriesCollectorV2Plugin(Star):
             "@timestamp": int(getattr(raw, "time", event.message_obj.timestamp) * 1000),
             "platform": event.get_platform_name().strip(),
             "platform_id": event.get_platform_id().strip(),
+            "message_id": event.message_obj.message_id,
             "group": group_doc,
             "sender": sender_doc,
             "summary": build_summary(chain),

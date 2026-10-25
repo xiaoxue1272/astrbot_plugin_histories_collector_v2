@@ -104,6 +104,7 @@ class ESHelper:
                 "@timestamp": {"type": "date"},
                 "platform": {"type": "keyword"},
                 "platform_id": {"type": "keyword"},
+                "message_id": {"type": "keyword"},
                 "group": {
                     "type": "nested",
                     "properties": {

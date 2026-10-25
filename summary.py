@@ -55,7 +55,9 @@ def build_summary(chain: list[EnhancedComponent]) -> str:
         elif isinstance(comp, EnhancedMentionAll):
             parts.append("[@:全体成员]")
         elif isinstance(comp, EnhancedReply):
-            reply_messages = [c for c in (comp.messages or []) if not isinstance(c, EnhancedReply)]
+            reply_messages = [
+                c for c in (comp.messages or []) if not isinstance(c, EnhancedReply)
+            ]
             inner_summary = build_summary(reply_messages)
             name = comp.sender_nickname if comp.sender_nickname else comp.sender_name
             if name and inner_summary:

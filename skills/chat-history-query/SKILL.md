@@ -17,14 +17,14 @@ description: >
 
 ### 使用约束
 
-- **务必显式指定 `size`**。概览类查询用 `100`，含 `messages` 的详细查询用 `20~50`；`from + size` 不要超过 `10000`（ES `max_result_window` 上限）。
+- **权限分级**：群聊中所有成员可用（自动限定当前群）；私聊仅管理员可用（可跨群查询，用于全量分析）。
+- **非管理员会被强制限制**：`size` 上限 `50`、`from + size` 上限 `10000`，`script` / `script_fields` / `runtime_mappings` 直接拒绝；管理员不受这些限制。
 - **务必用 `_source` 裁剪返回字段**。`messages` 数据量极大，只在需要查看具体消息内容时才包含；概览类查询用 `["@timestamp", "summary", "sender", "group"]`。
-- 不要在 body 中使用 `script`、`script_fields` 等脚本类参数。
 
 ### 群过滤规则
 
 - **群聊场景**：工具代码层会自动按当前群 ID 注入过滤，**不要在 body 里手动加 `group` 过滤**，否则会双重过滤。
-- **私聊场景**：不会自动过滤。用户指定了群名或群号时，需在 body 中自行添加：
+- **私聊场景**：仅管理员可用，且**不会**自动限定群，查询覆盖所有群。用户指定了群名或群号时，需在 body 中自行添加：
 
 ```json
 {
@@ -50,13 +50,16 @@ description: >
 | `@timestamp` | `date` | 毫秒时间戳（epoch_millis），ES 日期数学如 `now-7d` 同样可用 |
 | `platform` | `keyword` | 平台类型，如 `aiocqhttp`、`telegram` |
 | `platform_id` | `keyword` | 平台实例 ID |
+| `message_id` | `keyword` | 消息 ID（机器人自己发送的消息为空字符串，用 `sender.id` 识别） |
 | `summary` | `text` | 消息文本摘要（已包含 @、图片、语音等占位描述） |
 | `types` | `keyword` | 消息包含的组件类型数组（去重），顶层字段，查询无需 nested |
 | `group` | `nested` | `{id(keyword), name(keyword)}` |
 | `sender` | `nested` | `{id(keyword), name(keyword), nickname(keyword)}` |
 | `messages` | `nested` | 解析后的消息链，见下表 |
 
-> 文档 `_id` 由 `platform_id:group_id:message_id` 组成，`_source` 不再保存 `message_id`；按消息 ID 精确取文档时使用 `GET <alias>/_doc/<_id>`。
+> 文档 `_id` 为 Snowflake（每次收集生成唯一 ID）；同一条消息被多个平台实例收到或重放时会写入多条文档，需要去重时按 `message_id` + `platform_id` + `group.id` 组合查询。
+>
+> 若开启了 `collect_bot_message`，机器人自己发出的群消息也会入库：`message_id` 为空字符串，`sender.id` 为机器人账号。查询机器人消息用 `{"term": {"sender.id": "<机器人QQ号>"}}` 或 `{"term": {"message_id": ""}}`。
 
 ### sender 字段说明
 
@@ -192,7 +195,7 @@ description: >
 ## 注意事项
 
 - `group`、`sender`、`messages` 均为 `nested` 类型，查询时必须用 `nested` query 包裹；`types` 是顶层数组，直接 `term` / `terms` 即可。
-- `keyword` 字段（`platform`、`platform_id`、`group.*`、`sender.*`、`types`）做精确匹配用 `term` / `terms`；用 `match` 会按整串匹配，`wildcard` 才支持通配符。
+- `keyword` 字段（`platform`、`platform_id`、`message_id`、`group.*`、`sender.*`、`types`）做精确匹配用 `term` / `terms`；用 `match` 会按整串匹配，`wildcard` 才支持通配符。
 - 聚合统计时设置 `"size": 0`，不需要 `_source`。
 - 展示发送者时优先用 `sender.nickname`，不存在时回退 `sender.name`。
-- 私聊场景下该工具可以检索到所有群的数据，回答时注意不要泄露与当前对话无关的群信息。
+- 私聊场景仅管理员可用，且可以检索到所有群的数据；回答时注意不要泄露与当前对话无关的群信息。

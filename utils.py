@@ -1,7 +1,8 @@
 """插件通用工具函数。"""
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 PLUGIN_NAME = "astrbot_plugin_histories_collector_v2"
 
@@ -67,4 +68,5 @@ def format_bytes_to_mb(size_bytes: int) -> str:
 def get_plugin_data_dir() -> Path:
     """返回插件数据目录路径。"""
     from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
     return Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME

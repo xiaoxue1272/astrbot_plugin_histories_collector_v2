@@ -9,6 +9,7 @@
 - 🖼️ **媒体文件下载** — 图片/视频/文件/语音自动下载并本地缓存，MD5 内容去重（碰撞时回退 SHA-256）
 - 🔄 **QQ 合并转发展开** — 自动调用 OneBot API 展开 Forward 消息为 Node
 - 🎯 **群组过滤** — 支持白名单/黑名单模式，按平台分别配置
+- 🤖 **可选收集机器人消息** — 开启后机器人自己发出的群消息也会入库，便于统计对话全貌
 - 📂 **文件分级存储** — `image/YYYY/MM/hash.ext` 结构，按类型分目录
 - ⚡ **ES 断连健壮** — ES 不可用时插件正常启动，消息不积压不崩溃
 - 🔍 **IK 中文分词** — 默认开启，要求 ES 安装 `analysis-ik` 插件，否则插件无法启动（非中文环境可关闭）
@@ -40,6 +41,7 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
 | `group_filter.platforms` | 按平台配置群组 ID | `[]` |
 | `max_file_size_mb` | 下载文件大小上限(MB) | `50` |
 | `max_nesting_depth` | 合并消息最大嵌套层数 | `3` |
+| `collect_bot_message` | 收集机器人自己发送的群消息（`sender.id` 为机器人账号，`message_id` 为空） | `false` |
 
 ### 群组过滤说明
 
@@ -59,6 +61,7 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
   "@timestamp": 1719676800000,
   "platform": "aiocqhttp",
   "platform_id": "qq_main",
+  "message_id": 1781177174,
   "group": { "id": "123456", "name": "示例群名" },
   "sender": { "id": "10001", "name": "用户", "nickname": "QQ昵称" },
   "summary": "[图片] 你好",
@@ -72,13 +75,14 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
 | `@timestamp` | date | 毫秒时间戳 |
 | `platform` | keyword | 平台类型，如 `aiocqhttp` |
 | `platform_id` | keyword | 平台实例 ID |
+| `message_id` | keyword | 消息 ID |
 | `group` | nested | `{id(keyword), name(keyword)}` |
 | `sender` | nested | `{id(keyword), name(keyword), nickname(keyword)}`，`nickname` 仅部分平台提供 |
 | `summary` | text | 消息摘要 |
 | `types` | keyword | 消息包含的组件类型列表（去重） |
 | `messages` | nested | 消息链详情数组，见下文 |
 
-> 文档 `_id` 为 `platform_id:group_id:message_id`，`_source` 中不保存 `message_id`。
+> 文档 `_id` 为 Snowflake（每次收集生成唯一 ID）。同一条消息被多个平台实例收到或重放时会写入多条文档，可按 `message_id` + `platform_id` + `group.id` 组合去重。
 
 ### messages 元素
 
@@ -198,7 +202,7 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
 |---|----|----|
 | 索引 | `qq_messages` | `message-histories-v2`（可配置） |
 | 字段层级 | `messages.data.data.xxx`（三层） | `messages[].xxx`（扁平） |
-| 文档 `_id` | — | `platform_id:group_id:message_id`（幂等去重） |
+| 文档 `_id` | — | Snowflake |
 | 文件下载 | 不下载 | 自动下载并缓存 |
 | Forward | 不处理 | 自动展开为 Node |
 | 嵌套控制 | 无 | 支持 |

@@ -69,6 +69,12 @@
     "hint": "Node/Nodes/Forward 类型消息的最大递归解析层数，超过后截断",
     "default": 3
   },
+  "collect_bot_message": {
+    "description": "收集机器人自己发送的消息",
+    "type": "bool",
+    "hint": "开启后，机器人在群聊中发出的消息也会写入 ES：sender.id 为机器人账号，message_id 为空字符串。媒体文件按正常流程同步下载，发送后会略有延迟。默认关闭。",
+    "default": false
+  },
   "es_config": {
     "description": "Elasticsearch 配置",
     "type": "object",
