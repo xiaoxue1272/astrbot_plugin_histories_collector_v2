@@ -7,10 +7,10 @@ PlatformHelper (基类):
     失败时回退到 super()._convert()。
 """
 
-from astrbot.api import logger
-
+import json
 from dataclasses import dataclass
 
+from astrbot.api import logger
 from astrbot.core.message.components import (
     At,
     BaseMessageComponent,
@@ -29,7 +29,9 @@ from astrbot.core.message.components import (
     Video,
 )
 from astrbot.core.platform import AstrMessageEvent
-
+from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import (
+    DownloadManager,
+)
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedComponent,
     EnhancedFace,
@@ -48,7 +50,6 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedVideo,
     EnhancedVoice,
 )
-from data.plugins.astrbot_plugin_histories_collector_v2.download_manager import DownloadManager
 
 
 @dataclass
@@ -69,7 +70,12 @@ class PlatformHelper:
     覆写 _convert() 实现平台特定的组件转换。
     """
 
-    def __init__(self, event: AstrMessageEvent, config: CollectorConfig, download_manager: DownloadManager):
+    def __init__(
+        self,
+        event: AstrMessageEvent,
+        config: CollectorConfig,
+        download_manager: DownloadManager,
+    ):
         self._event = event
         self._config = config
         self._download_manager = download_manager
@@ -131,12 +137,14 @@ class PlatformHelper:
         if isinstance(component, Video):
             return EnhancedVideo(url=getattr(component, "url", ""))
         if isinstance(component, Record):
-            return EnhancedVoice(url=getattr(component, "url", ""), text=getattr(component, "text", None))
+            return EnhancedVoice(
+                url=getattr(component, "url", ""), text=getattr(component, "text", None)
+            )
         if isinstance(component, Face):
             return EnhancedFace(id=str(getattr(component, "id", "")))
         if isinstance(component, Reply):
             messages = []
-            for comp in getattr(component, "content", []):
+            for comp in getattr(component, "chain", []) or []:
                 enhanced_comp = await self._convert(comp)
                 if enhanced_comp is not None:
                     messages.append(enhanced_comp)
@@ -145,10 +153,14 @@ class PlatformHelper:
                 sender_id=getattr(component, "sender_id", None),
                 sender_nickname=getattr(component, "sender_nickname", None),
                 time=getattr(component, "time", None),
-                messages=messages
+                messages=messages,
             )
         if isinstance(component, Json):
-            return EnhancedJson(data=getattr(component, "data", None))
+            data = getattr(component, "data", None)
+            if data is None:
+                return EnhancedJson()
+            # 统一序列化为合法 JSON 字符串，与 aiocqhttp 路径保持一致
+            return EnhancedJson(data=json.dumps(data, ensure_ascii=False))
         if isinstance(component, Forward):
             return EnhancedForward(id=getattr(component, "id", None))
         if isinstance(component, Nodes):
@@ -210,9 +222,12 @@ def create_platform_helper(
     Returns:
         平台辅助类实例。
     """
-    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-
-    from data.plugins.astrbot_plugin_histories_collector_v2.platforms.aiocqhttp import AiocqhttpPlatformHelper
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+    from data.plugins.astrbot_plugin_histories_collector_v2.platforms.aiocqhttp import (
+        AiocqhttpPlatformHelper,
+    )
 
     if isinstance(event, AiocqhttpMessageEvent):
         return AiocqhttpPlatformHelper(event, config, download_manager)

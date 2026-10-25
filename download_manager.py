@@ -34,6 +34,15 @@ class DownloadManager:
         "voice": ".amr",
     }
 
+    # 各媒体类型允许的扩展名。QQ 等平台会给动画表情返回 ``<hash>.0``
+    # 这类内部类型标记，不能直接当作文件后缀。
+    _ALLOWED_EXTENSIONS: dict[str, set[str]] = {
+        "image": {".png", ".jpg", ".jpeg", ".jpe", ".gif", ".webp", ".bmp", ".avif"},
+        "sticker": {".png", ".jpg", ".jpeg", ".jpe", ".gif", ".webp", ".bmp", ".avif"},
+        "video": {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v"},
+        "voice": {".amr", ".wav", ".mp3", ".ogg", ".silk", ".m4a", ".aac", ".flac"},
+    }
+
     # 下载超时：连接 10s 快速失败，整体 30 分钟上限
     _DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(connect=10, total=1800)
 
@@ -186,6 +195,7 @@ class DownloadManager:
         """决定文件后缀。
 
         优先级：发送方提供的文件名后缀 → Content-Type → 类型默认后缀。
+        仅接受各媒体类型白名单内的后缀，``.0`` 等平台内部标记会被忽略并回退。
 
         Args:
             file_type: 组件类型（image/sticker/video/voice/file）。
@@ -195,15 +205,19 @@ class DownloadManager:
         Returns:
             含点的后缀字符串，无法确定时返回空字符串。
         """
+        allowed = DownloadManager._ALLOWED_EXTENSIONS.get(file_type)
+
         from_name = Path(name).suffix.lower() if name else ""
-        if from_name and len(from_name) <= 8:
+        if from_name and len(from_name) <= 8 and (not allowed or from_name in allowed):
             return from_name
 
         guessed: str | None = None
         if content_type:
             mime = content_type.split(";")[0].strip().lower()
             guessed = mimetypes.guess_extension(mime)
-        suffix = guessed or DownloadManager._EXT_FALLBACK.get(file_type, "")
+        if guessed and len(guessed) <= 8 and (not allowed or guessed in allowed):
+            return guessed
+        suffix = DownloadManager._EXT_FALLBACK.get(file_type, "")
         if not suffix:
             logger.warning(f"无法确定文件后缀: type={file_type}, content_type={content_type}")
         return suffix

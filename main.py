@@ -82,6 +82,11 @@ class HistoriesCollectorV2Plugin(Star):
         super().__init__(context)
         self.config = HistoriesCollectorConfig(config)
         self.id_generator = SnowflakeGenerator(instance=0)
+        # 预先置 None，确保 initialize 失败时 terminate 与事件处理不会抛 AttributeError
+        self.group_filter = None
+        self.es_helper = None
+        self.collector_config = None
+        self.download_manager = None
 
     async def initialize(self) -> None:
         """连接 Elasticsearch 并初始化索引。"""
@@ -120,8 +125,18 @@ class HistoriesCollectorV2Plugin(Star):
         if doc is None:
             return
 
+        # 稳定文档 ID：同一平台实例、同一群、同一消息只保留一条记录。
+        # message_id 不再写入 _source，仅用于生成去重 ID；缺失时回退 Snowflake。
+        message_id = event.message_obj.message_id
+        if message_id:
+            platform_id = doc.get("platform_id") or ""
+            doc_group_id = (doc.get("group") or {}).get("id") or ""
+            doc_id = f"{platform_id}:{doc_group_id}:{message_id}"
+        else:
+            doc_id = str(next(self.id_generator))
+
         try:
-            await self.es_helper.save_message(next(self.id_generator), doc)
+            await self.es_helper.save_message(doc_id, doc)
         except Exception as e:
             logger.error(
                 f"ES 保存消息失败，消息已丢弃: message_id={event.message_obj.message_id}, {e}"
@@ -160,7 +175,6 @@ class HistoriesCollectorV2Plugin(Star):
             "@timestamp": int(getattr(raw, "time", event.message_obj.timestamp) * 1000),
             "platform": event.get_platform_name().strip(),
             "platform_id": event.get_platform_id().strip(),
-            "message_id": event.message_obj.message_id,
             "group": group_doc,
             "sender": sender_doc,
             "summary": build_summary(chain),
@@ -172,7 +186,7 @@ class HistoriesCollectorV2Plugin(Star):
     async def terminate(self) -> None:
         """插件卸载/禁用时清理资源。"""
         logger.info("HistoriesCollectorV2 插件正在关闭...")
-        if self.es_helper:
+        if self.es_helper is not None:
             await self.es_helper.close()
-        if self.download_manager:
+        if self.download_manager is not None:
             await self.download_manager.close()

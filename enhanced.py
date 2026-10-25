@@ -97,7 +97,8 @@ class EnhancedFile(EnhancedComponent):
     """可下载组件基类（含 file 类型本身）。
 
     ``name`` 存放发送方提供的文件名（平台数据或 ``Content-Disposition``），
-    ``url`` / ``path`` / ``warn`` 为公共字段；
+    ``path`` 为插件数据目录下的相对路径，
+    ``url`` / ``warn`` 为公共字段；
     下载与命名逻辑统一收敛在 ``DownloadManager``（download_manager.py）。
     """
 

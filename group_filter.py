@@ -1,5 +1,4 @@
 from astrbot.api import logger
-
 from data.plugins.astrbot_plugin_histories_collector_v2.config import GroupFilterConfig
 
 
@@ -15,12 +14,15 @@ class GroupFilter:
     def __init__(self, config: GroupFilterConfig):
         self._mode = config.mode
 
+        # 同一平台允许配置多条，群组 ID 需要合并而不是互相覆盖
         self._platform_groups: dict[str, set[str]] = {}
         for entry in config.platforms:
             platform = entry.get("platform", "")
             group_ids = entry.get("group_ids", [])
-            if platform and group_ids:
-                self._platform_groups[platform] = set(str(g) for g in group_ids)
+            if not platform:
+                continue
+            groups = {str(g) for g in group_ids if str(g)}
+            self._platform_groups.setdefault(platform, set()).update(groups)
 
     def should_collect(self, platform_name: str, group_id: str) -> bool:
         """判断某条群消息是否应被收集。
@@ -32,6 +34,8 @@ class GroupFilter:
         Returns:
             True 表示应收集，False 表示应过滤。
         """
+        # 部分平台的 group_id 是 int，与配置中的字符串统一后再比较
+        group_id = str(group_id) if group_id else ""
 
         target_set = self._platform_groups.get(platform_name, set())
 

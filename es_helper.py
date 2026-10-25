@@ -1,6 +1,6 @@
 from typing import Any
 
-from elasticsearch import AsyncElasticsearch, NotFoundError
+from elasticsearch import AsyncElasticsearch, ConflictError, NotFoundError
 
 from astrbot.api import logger
 from data.plugins.astrbot_plugin_histories_collector_v2.config import ESConfig
@@ -10,7 +10,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 class ESHelper:
     """Elasticsearch 操作：索引生命周期、模板管理和消息持久化。"""
 
-    _es_client: AsyncElasticsearch
+    _es_client: AsyncElasticsearch | None
 
     _MAX_SAVE_RETRIES = 3
     _RETRY_BASE_DELAY = 1.0
@@ -32,6 +32,13 @@ class ESHelper:
         self._alias = config.alias
         self._ilm_policy_name = f"{self._alias}-policy"
         self._use_ik = config.use_ik_analyzer
+        self._es_client: AsyncElasticsearch | None = None
+        self._ik_hint = (
+            "。若 ES 未安装 analysis-ik 分词插件，请在插件配置中关闭 "
+            "use_ik_analyzer，或为 ES 安装 IK 插件"
+            if self._use_ik
+            else ""
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -59,7 +66,14 @@ class ESHelper:
         await self._setup_indices()
 
     async def _setup_indices(self):
-        """创建 ILM 策略、索引模板和初始写入索引。"""
+        """创建 ILM 策略、索引模板和初始写入索引。
+
+        启用 IK 分词器时，ES 必须安装 analysis-ik 插件，否则初始化直接失败；
+        不使用中文分词的环境可以在插件配置中关闭 use_ik_analyzer。
+
+        Raises:
+            Exception: 索引模板或初始索引创建失败时抛出。
+        """
         await self._ensure_ilm_policy()
         await self._ensure_index_template()
         await self._ensure_write_index_exists()
@@ -99,7 +113,6 @@ class ESHelper:
                 "@timestamp": {"type": "date"},
                 "platform": {"type": "keyword"},
                 "platform_id": {"type": "keyword"},
-                "message_id": {"type": "keyword"},
                 "group": {
                     "type": "nested",
                     "properties": {
@@ -132,6 +145,8 @@ class ESHelper:
 
     async def _ensure_ilm_policy(self):
         """创建或更新 ILM 策略，失败不阻塞。"""
+        if not self._es_client:
+            return
         try:
             await self._es_client.ilm.put_lifecycle(
                 name=self._ilm_policy_name,
@@ -141,8 +156,14 @@ class ESHelper:
         except Exception as e:
             logger.warning(f"ILM 策略创建失败（将在无 ILM 的情况下继续运行）: {e}")
 
-    async def _ensure_index_template(self):
-        """创建或更新索引模板。"""
+    async def _ensure_index_template(self) -> None:
+        """创建或更新索引模板。
+
+        Raises:
+            Exception: 模板创建失败时抛出，错误信息包含 IK 分词器排查提示。
+        """
+        if not self._es_client:
+            raise RuntimeError("ES 客户端不可用")
         template_name = f"{self._alias}-template"
         template_body = {
             "index_patterns": f"{self._alias}-*",
@@ -161,11 +182,19 @@ class ESHelper:
             )
             logger.info(f"索引模板 '{template_name}' 已创建/更新。")
         except Exception as e:
-            logger.error(f"索引模板创建失败: {e}")
-            raise
+            logger.error(f"索引模板创建失败: {e}{self._ik_hint}")
+            raise RuntimeError(f"索引模板创建失败: {e}{self._ik_hint}") from e
 
     async def _ensure_write_index_exists(self):
-        """确保可写初始索引存在并绑定到别名。"""
+        """确保可写初始索引存在并绑定到别名。
+
+        启用 IK 分词器时，ES 必须安装 analysis-ik 插件，否则直接失败。
+
+        Raises:
+            Exception: 索引创建失败时抛出，错误信息包含 IK 分词器排查提示。
+        """
+        if not self._es_client:
+            raise RuntimeError("ES 客户端不可用")
         try:
             alias_info = await self._es_client.indices.get_alias(name=self._alias)
             if alias_info:
@@ -199,14 +228,14 @@ class ESHelper:
                 f"写入别名 '{self._alias}'。"
             )
         except Exception as e:
-            logger.error(f"创建初始索引失败: {e}")
-            raise
+            logger.error(f"创建初始索引失败: {e}{self._ik_hint}")
+            raise RuntimeError(f"创建初始索引失败: {e}{self._ik_hint}") from e
 
     async def save_message(self, doc_id: str, doc_body: dict):
         """保存消息文档到 ES，带指数退避重试。
 
         Args:
-            doc_id: Snowflake 生成的唯一文档 ID。
+            doc_id: 稳定文档 ID（platform:group:message），或 message_id 缺失时的 Snowflake 回退值。
             doc_body: ES 文档字典。
 
         Raises:
@@ -217,12 +246,16 @@ class ESHelper:
             return None
 
         async def _do_save():
-            response = await self._es_client.create(
-                index=self._alias,
-                id=doc_id,
-                document=doc_body,
-                require_alias=True,
-            )
+            try:
+                response = await self._es_client.create(
+                    index=self._alias,
+                    id=doc_id,
+                    document=doc_body,
+                    require_alias=True,
+                )
+            except ConflictError:
+                logger.debug(f"文档已存在，跳过重复写入: doc_id={doc_id}")
+                return None
             result = response.get("result")
             if result in ("created", "updated"):
                 return response
@@ -241,7 +274,7 @@ class ESHelper:
         except Exception as e:
             logger.warning(
                 f"ES 保存重试 {self._MAX_SAVE_RETRIES} 次全部失败: "
-                f"doc_id={doc_id}, message_id={doc_body.get('message_id')}, {e}"
+                f"doc_id={doc_id}, {e}"
             )
             raise
 
@@ -262,3 +295,4 @@ class ESHelper:
         """关闭 Elasticsearch 客户端连接。"""
         if self._es_client:
             await self._es_client.close()
+            self._es_client = None

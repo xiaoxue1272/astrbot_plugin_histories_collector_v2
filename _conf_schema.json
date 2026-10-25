@@ -6,14 +6,14 @@
       "mode": {
         "description": "过滤模式",
         "type": "string",
-        "hint": "whitelist: 仅收集列表中群组; blacklist: 排除列表中群组;",
+        "hint": "whitelist: 仅收集列表中群组; blacklist: 排除列表中群组。默认 whitelist 且群组列表为空时不会收集任何消息，请先配置需要收集的群组 ID。",
         "options": ["whitelist", "blacklist"],
         "default": "whitelist"
       },
       "platforms": {
         "description": "各平台群组列表",
         "type": "template_list",
-        "hint": "按平台配置需要收集/排除的群组 ID 列表",
+        "hint": "按平台配置需要收集/排除的群组 ID 列表。白名单模式下留空表示不收集任何群；黑名单模式下留空表示收集所有群。",
         "templates": {
           "platform_entry": {
             "name": "平台群组",
@@ -22,13 +22,33 @@
               "platform": {
                 "description": "平台名",
                 "type": "string",
-                "options": ["aiocqhttp", "telegram", "discord", "lark", "wecom", "dingtalk", "slack", "kook"],
+                "options": [
+                  "aiocqhttp",
+                  "qq_official",
+                  "qq_official_webhook",
+                  "telegram",
+                  "wecom",
+                  "wecom_ai_bot",
+                  "lark",
+                  "dingtalk",
+                  "discord",
+                  "slack",
+                  "kook",
+                  "vocechat",
+                  "weixin_official_account",
+                  "satori",
+                  "misskey",
+                  "line",
+                  "matrix",
+                  "weixin_oc",
+                  "mattermost"
+                ],
                 "default": "aiocqhttp"
               },
               "group_ids": {
                 "description": "群组 ID 列表",
                 "type": "list",
-                "hint": "填写需要收集/排除的群组 ID",
+                "hint": "填写需要收集/排除的群组 ID（QQ 群号、Telegram chat id 等平台原始 ID）",
                 "default": []
               }
             }
@@ -81,7 +101,7 @@
       "use_ik_analyzer": {
         "description": "启用 IK 分词器",
         "type": "bool",
-        "hint": "中文环境建议开启，需要 ES 安装 IK 分词插件；非中文环境可关闭",
+        "hint": "开启后 ES 必须安装 analysis-ik 分词插件，否则插件无法启动、无法收集消息；非中文环境可关闭",
         "default": true
       }
     }

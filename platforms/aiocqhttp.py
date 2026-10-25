@@ -5,15 +5,15 @@
 """
 
 import inspect
+import json
 import re
 import xml.etree.ElementTree as ET
-from typing import Any
-
-from astrbot.core.message.components import BaseMessageComponent
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 from astrbot.api import logger
-from data.plugins.astrbot_plugin_histories_collector_v2.chain_iter import MessageChainIter
+from astrbot.core.message.components import BaseMessageComponent
+from data.plugins.astrbot_plugin_histories_collector_v2.chain_iter import (
+    MessageChainIter,
+)
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedComponent,
     EnhancedFace,
@@ -31,7 +31,9 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedVideo,
     EnhancedVoice,
 )
-from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import PlatformHelper
+from data.plugins.astrbot_plugin_histories_collector_v2.platform_helper import (
+    PlatformHelper,
+)
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 
 
@@ -70,7 +72,9 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             result = await self._parse_onebot_segment(ctx)
             if result is not None:
                 return result
-            logger.debug(f"OneBot segment 解析失败，回退默认转换: type={ctx.get('type', '?')}")
+            logger.debug(
+                f"OneBot segment 解析失败，回退默认转换: type={ctx.get('type', '?')}"
+            )
         return await super()._convert(component, ctx)
 
     # ── 发送者 ──
@@ -89,14 +93,15 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             return {
                 "id": sender.get("user_id", ""),
                 "name": sender.get("nickname", ""),
-                "nickname": sender.get("card", "")
+                "nickname": sender.get("card", ""),
             }
         return await super().get_sender()
 
-
     # ── 转发消息解析 ──
 
-    async def resolve_forward(self, forward_id: str, depth: int = 0) -> list[EnhancedComponent] | None:
+    async def resolve_forward(
+        self, forward_id: str, depth: int = 0
+    ) -> list[EnhancedComponent] | None:
         """通过 OneBot API get_forward_msg 展开转发消息。"""
         call_action = self._event.bot.api.call_action
         try:
@@ -111,14 +116,19 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             return None
 
         messages_data = forward_data.get("messages", [])
-        if not messages_data:
-            logger.warning(f"转发消息 {forward_id}: 无消息内容")
+        if not isinstance(messages_data, list) or not messages_data:
+            logger.warning(f"转发消息 {forward_id}: messages 格式异常或为空")
             return None
 
         logger.debug(f"转发消息 {forward_id} 已解析，共 {len(messages_data)} 条消息")
         nodes: list[EnhancedComponent] = []
         for msg in messages_data:
+            if not isinstance(msg, dict):
+                logger.warning(f"转发消息 {forward_id}: 存在非法消息节点，已跳过")
+                continue
             sender = msg.get("sender", {})
+            if not isinstance(sender, dict):
+                sender = {}
             segments = msg.get("message", [])
             inner_chain = await self._onebot_segments_to_chain(segments, depth + 1)
             node = EnhancedNode(
@@ -141,14 +151,24 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         if depth > self._config.max_nesting_depth:
             logger.debug(f"已达最大嵌套深度 {self._config.max_nesting_depth}，截断")
             return []
+        if not isinstance(segments, list):
+            logger.warning(
+                f"OneBot 消息段列表格式异常: {type(segments).__name__}，按空链处理"
+            )
+            return []
         chain: list[EnhancedComponent] = []
         for seg in segments:
+            if not isinstance(seg, dict):
+                logger.warning(f"跳过非法的 OneBot 消息段: {type(seg).__name__}")
+                continue
             result = await self._parse_onebot_segment(seg, depth)
             if result is not None:
                 chain.append(result)
         return chain
 
-    async def _parse_onebot_segment(self, seg: dict, depth: int = 0) -> EnhancedComponent | None:
+    async def _parse_onebot_segment(
+        self, seg: dict, depth: int = 0
+    ) -> EnhancedComponent | None:
         """按类型分发 OneBot segment 到对应解析器。"""
         seg_type = seg.get("type", "")
         seg_data = seg.get("data", {})
@@ -184,7 +204,13 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         return EnhancedPlain(text=str(data.get("text", "")))
 
     async def _parse_image(self, data: dict) -> EnhancedImage | EnhancedSticker:
-        sub_type = int(data.get("sub_type", 0))
+        try:
+            sub_type = int(data.get("sub_type") or 0)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"图片 sub_type 异常，按普通图片处理: {data.get('sub_type')!r}"
+            )
+            sub_type = 0
         url = data.get("url", "")
         name = data.get("file", "")
         summary = data.get("summary") or None
@@ -199,7 +225,9 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         if not message_id:
             message_id = self._event.message_obj.message_id
         text = await self.fetch_record_text(message_id)
-        comp = EnhancedVoice(url=data.get("url", ""), name=data.get("file", ""), text=text)
+        comp = EnhancedVoice(
+            url=data.get("url", ""), name=data.get("file", ""), text=text
+        )
         await self._download_manager.download_and_cache(comp)
         return comp
 
@@ -217,14 +245,17 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         qq = str(data.get("qq", ""))
         if qq == "all":
             return EnhancedMentionAll()
-        group_member = await self.get_group_member(qq)
+
+        # OneBot API 返回 dict，必须用 .get() 取值；getattr 对 dict 无效
         name, nickname = "", ""
-        if group_member:
-            name = getattr(group_member, "nickname", "")
-            nickname = getattr(group_member, "card", "")
+        group_member = await self.get_group_member(qq)
+        if isinstance(group_member, dict):
+            name = str(group_member.get("nickname") or "")
+            nickname = str(group_member.get("card") or "")
         else:
             stranger = await self.get_stranger(qq)
-            name = getattr(stranger, "nickname", "")
+            if isinstance(stranger, dict):
+                name = str(stranger.get("nickname") or "")
         return EnhancedMention(id=qq, name=name, nickname=nickname)
 
     async def _parse_reply(self, data: dict, depth: int = 0) -> EnhancedReply:
@@ -248,30 +279,46 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         logger.warning(f"回复 {reply_id}: get_msg 失败，仅存 id")
         return EnhancedReply(id=reply_id)
 
-    async def _parse_forward(self, data: dict, depth: int = 0) -> EnhancedForward | EnhancedNodes:
+    async def _parse_forward(
+        self, data: dict, depth: int = 0
+    ) -> EnhancedForward | EnhancedNodes:
         forward_id = str(data.get("id", ""))
         if depth >= self._config.max_nesting_depth:
             logger.debug(f"转发消息已达最大嵌套深度，截断: id={forward_id}")
             return EnhancedForward(id=forward_id)
         content = data.get("content", [])
+        if not isinstance(content, list):
+            logger.warning(f"转发消息 {forward_id}: content 格式异常，改为接口展开")
+            content = []
         summary = self._parse_forward_summary() if depth == 0 else None
         if not content:
             messages = await self.resolve_forward(forward_id, depth)
             return EnhancedForward(id=forward_id, summary=summary, messages=messages)
         node_list: list[EnhancedComponent] = []
         for node_data in content:
+            if not isinstance(node_data, dict):
+                logger.warning(f"转发消息 {forward_id}: 存在非法节点，已跳过")
+                continue
             inner_segments = node_data.get("message", [])
-            inner_chain = await self._onebot_segments_to_chain(inner_segments, depth + 1)
+            inner_chain = await self._onebot_segments_to_chain(
+                inner_segments, depth + 1
+            )
             sender = node_data.get("sender", {})
-            node_list.append(EnhancedNode(
-                sender_id=str(sender.get("user_id", "")),
-                sender_name=sender.get("nickname", ""),
-                messages=inner_chain,
-            ))
+            if not isinstance(sender, dict):
+                sender = {}
+            node_list.append(
+                EnhancedNode(
+                    sender_id=str(sender.get("user_id", "")),
+                    sender_name=sender.get("nickname", ""),
+                    messages=inner_chain,
+                )
+            )
         return EnhancedNodes(messages=node_list, summary=summary)
 
     async def _parse_node(self, data: dict, depth: int = 0) -> EnhancedNode:
-        inner_chain = await self._onebot_segments_to_chain(data.get("content", []), depth + 1)
+        inner_chain = await self._onebot_segments_to_chain(
+            data.get("content", []), depth + 1
+        )
         return EnhancedNode(
             sender_id=str(data.get("uin", "")),
             sender_name=data.get("name", ""),
@@ -280,7 +327,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
 
     @staticmethod
     def _parse_json(data: dict) -> EnhancedJson:
-        return EnhancedJson(data=str(data))
+        return EnhancedJson(data=json.dumps(data, ensure_ascii=False))
 
     @staticmethod
     def _parse_face(data: dict) -> EnhancedFace:
@@ -307,7 +354,9 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         if not xml_content:
             return None
         try:
-            root = ET.fromstring(re.sub(r"&(?!amp;|lt;|gt;|quot;|apos;)", "&amp;", xml_content))
+            root = ET.fromstring(
+                re.sub(r"&(?!amp;|lt;|gt;|quot;|apos;)", "&amp;", xml_content)
+            )
         except ET.ParseError:
             return None
 
@@ -351,8 +400,15 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             return result.get("text")
         return None
 
-    async def get_group_member(self, user_id: str | None = None) -> Any | None:
-        """通过 get_group_member_info 获取群名片或昵称。"""
+    async def get_group_member(self, user_id: str | None = None) -> dict | None:
+        """通过 get_group_member_info 获取群名片或昵称。
+
+        Args:
+            user_id: 目标用户 ID，为空时取当前事件发送者。
+
+        Returns:
+            OneBot API 返回的成员信息 dict，失败时为 None。
+        """
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action
@@ -371,8 +427,15 @@ class AiocqhttpPlatformHelper(PlatformHelper):
             return result
         return None
 
-    async def get_stranger(self, user_id: str | None = None) -> Any | None:
-        """通过 get_stranger_info 获取 QQ 昵称。"""
+    async def get_stranger(self, user_id: str | None = None) -> dict | None:
+        """通过 get_stranger_info 获取 QQ 昵称。
+
+        Args:
+            user_id: 目标用户 ID，为空时取当前事件发送者。
+
+        Returns:
+            OneBot API 返回的用户信息 dict，失败时为 None。
+        """
         if user_id is None:
             user_id = self._event.get_sender_id()
         call_action = self._event.bot.api.call_action

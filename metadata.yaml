@@ -6,4 +6,21 @@ author: xiaoxue1272 # 作者
 repo: https://github.com/xiaoxue1272/astrbot_plugin_histories_collector_v2 # 插件的仓库地址
 support_platforms:
   - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+  - telegram
   - wecom
+  - wecom_ai_bot
+  - lark
+  - dingtalk
+  - discord
+  - slack
+  - kook
+  - vocechat
+  - weixin_official_account
+  - satori
+  - misskey
+  - line
+  - matrix
+  - weixin_oc
+  - mattermost
