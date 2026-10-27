@@ -66,6 +66,8 @@ class HistoriesCollectorV2Plugin(Star):
 
         self.collector_config = CollectorConfig(
             max_nesting_depth=self.config.max_nesting_depth,
+            parse_types=self.config.parse_types,
+            download_types=self.config.download_types,
         )
         self.download_manager = DownloadManager(
             max_file_size_mb=self.config.max_file_size_mb,
@@ -143,12 +145,15 @@ class HistoriesCollectorV2Plugin(Star):
         helper = create_platform_helper(
             event, self.collector_config, self.download_manager
         )
-        # 复用 PlatformHelper 的组件转换逻辑（含媒体下载与缓存）
         enhanced = []
         for comp in chain:
             converted = await helper._convert(comp)
             if converted is not None:
                 enhanced.append(converted)
+        if not enhanced:
+            return
+        # 与平台消息链一致：类型过滤 + 媒体下载
+        enhanced = await helper.filter_and_download(enhanced)
         if not enhanced:
             return
 

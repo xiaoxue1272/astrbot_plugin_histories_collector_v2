@@ -8,7 +8,12 @@ class EnhancedSender:
     name: str | None
     nickname: str | None
 
-    def __init__(self, id: str | None = None, name: str | None = None, nickname: str | None = None):
+    def __init__(
+        self,
+        id: str | None = None,
+        name: str | None = None,
+        nickname: str | None = None,
+    ):
         self.id = id
         self.name = name
         self.nickname = nickname
@@ -51,6 +56,7 @@ class EnhancedComponent:
 
 # ---- 媒体 mixin ----
 
+
 class EnhancedMedia:
     """mixin：需要 MediaResolver 加工的组件（目前仅音频转码）。
 
@@ -63,6 +69,7 @@ class EnhancedMedia:
 
 # ---- 文本 ----
 
+
 class EnhancedPlain(EnhancedComponent):
     type = "text"
     text: str | None
@@ -73,13 +80,16 @@ class EnhancedPlain(EnhancedComponent):
 
 # ---- @提及 ----
 
+
 class EnhancedMention(EnhancedComponent):
     type = "mention"
     id: str | None
     name: str | None
     nickname: str | None
 
-    def __init__(self, id: str | None = "", name: str | None = "", nickname: str | None = ""):
+    def __init__(
+        self, id: str | None = "", name: str | None = "", nickname: str | None = ""
+    ):
         self.id = id
         self.name = name
         self.nickname = nickname
@@ -87,11 +97,13 @@ class EnhancedMention(EnhancedComponent):
 
 # ---- @全体成员 ----
 
+
 class EnhancedMentionAll(EnhancedComponent):
     type = "mention_all"
 
 
 # ---- 文件（可下载组件基类） ----
+
 
 class EnhancedFile(EnhancedComponent):
     """可下载组件基类（含 file 类型本身）。
@@ -111,9 +123,12 @@ class EnhancedFile(EnhancedComponent):
     def __init__(self, name: str | None = None, url: str | None = None):
         self.name = name
         self.url = url
+        self.path: str | None = None
+        self.warn: str | None = None
 
 
 # ---- 图片 / 贴纸 ----
+
 
 class EnhancedImage(EnhancedFile):
     type = "image"
@@ -123,12 +138,18 @@ class EnhancedSticker(EnhancedFile):
     type = "sticker"
     summary: str | None
 
-    def __init__(self, name: str | None = None, url: str | None = None, summary: str | None = None):
+    def __init__(
+        self,
+        name: str | None = None,
+        url: str | None = None,
+        summary: str | None = None,
+    ):
         super().__init__(name=name, url=url)
         self.summary = summary
 
 
 # ---- 视频 ----
+
 
 class EnhancedVideo(EnhancedFile):
     type = "video"
@@ -136,17 +157,21 @@ class EnhancedVideo(EnhancedFile):
 
 # ---- 语音 ----
 
+
 class EnhancedVoice(EnhancedFile, EnhancedMedia):
     type = "voice"
     media_type = "audio"
     text: str | None
 
-    def __init__(self, name: str | None = None, url: str | None = None, text: str | None = None):
+    def __init__(
+        self, name: str | None = None, url: str | None = None, text: str | None = None
+    ):
         super().__init__(name=name, url=url)
         self.text = text
 
 
 # ---- 引用回复 ----
+
 
 class EnhancedReply(EnhancedComponent):
     type = "reply"
@@ -157,9 +182,15 @@ class EnhancedReply(EnhancedComponent):
     sender_nickname: str | None
     time: int | None
 
-    def __init__(self, id: str | None = None, messages: list[EnhancedComponent] | None = None,
-                 sender_id: str | None = None, sender_name: str | None = None,
-                 sender_nickname: str | None = None, time: int | None = None):
+    def __init__(
+        self,
+        id: str | None = None,
+        messages: list[EnhancedComponent] | None = None,
+        sender_id: str | None = None,
+        sender_name: str | None = None,
+        sender_nickname: str | None = None,
+        time: int | None = None,
+    ):
         self.id = id
         self.messages = messages
         self.sender_id = sender_id
@@ -169,6 +200,7 @@ class EnhancedReply(EnhancedComponent):
 
 
 # ---- 表情 ----
+
 
 class EnhancedFace(EnhancedComponent):
     type = "face"
@@ -180,6 +212,7 @@ class EnhancedFace(EnhancedComponent):
 
 # ---- JSON ----
 
+
 class EnhancedJson(EnhancedComponent):
     type = "json"
     data: str | None
@@ -190,13 +223,19 @@ class EnhancedJson(EnhancedComponent):
 
 # ---- 转发消息 ----
 
+
 class EnhancedForward(EnhancedComponent):
     type = "forward"
     id: str | None
     summary: str | None = None
     messages: list[EnhancedComponent] | None
 
-    def __init__(self, id: str | None = None, summary: str | None = None, messages: list[EnhancedComponent] | None = None):
+    def __init__(
+        self,
+        id: str | None = None,
+        summary: str | None = None,
+        messages: list[EnhancedComponent] | None = None,
+    ):
         self.id = id
         self.summary = summary
         self.messages = messages
@@ -204,17 +243,23 @@ class EnhancedForward(EnhancedComponent):
 
 # ---- 合并转发节点列表 ----
 
+
 class EnhancedNodes(EnhancedComponent):
     type = "nodes"
     summary: str | None = None
     messages: list[EnhancedComponent] | None
 
-    def __init__(self, summary: str | None = None, messages: list[EnhancedComponent] | None = None):
+    def __init__(
+        self,
+        summary: str | None = None,
+        messages: list[EnhancedComponent] | None = None,
+    ):
         self.summary = summary
         self.messages = messages
 
 
 # ---- 转发节点 ----
+
 
 class EnhancedNode(EnhancedComponent):
     type = "node"
@@ -222,12 +267,19 @@ class EnhancedNode(EnhancedComponent):
     messages: list[EnhancedComponent] | None
     time: int | None
 
-    def __init__(self, sender_id: str | None = None, sender_name: str | None = None,
-                 sender_nickname: str | None = None, messages: list[EnhancedComponent] | None = None,
-                 time: int | None = None):
+    def __init__(
+        self,
+        sender_id: str | None = None,
+        sender_name: str | None = None,
+        sender_nickname: str | None = None,
+        messages: list[EnhancedComponent] | None = None,
+        time: int | None = None,
+    ):
         self.sender = None
         if sender_id:
-            self.sender = EnhancedSender(id=sender_id, name=sender_name, nickname=sender_nickname)
+            self.sender = EnhancedSender(
+                id=sender_id, name=sender_name, nickname=sender_nickname
+            )
         self.messages = messages
         self.time = time
 
@@ -240,6 +292,7 @@ class EnhancedNode(EnhancedComponent):
 
 # ---- 分享 ----
 
+
 class EnhancedShare(EnhancedComponent):
     type = "share"
     url: str | None
@@ -247,8 +300,13 @@ class EnhancedShare(EnhancedComponent):
     content: str | None
     image: str | None
 
-    def __init__(self, url: str | None = None, title: str | None = None,
-                 content: str | None = None, image: str | None = None):
+    def __init__(
+        self,
+        url: str | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        image: str | None = None,
+    ):
         self.url = url
         self.title = title
         self.content = content
@@ -256,6 +314,7 @@ class EnhancedShare(EnhancedComponent):
 
 
 # ---- 音乐 ----
+
 
 class EnhancedMusic(EnhancedComponent):
     type = "music"
@@ -267,10 +326,16 @@ class EnhancedMusic(EnhancedComponent):
     content: str | None = None
     image: str | None = None
 
-    def __init__(self, source: str | None = None, id: int | None = None,
-                 url: str | None = None, audio: str | None = None,
-                 title: str | None = None, content: str | None = None,
-                 image: str | None = None):
+    def __init__(
+        self,
+        source: str | None = None,
+        id: int | None = None,
+        url: str | None = None,
+        audio: str | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        image: str | None = None,
+    ):
         self.source = source
         self.id = id
         self.url = url

@@ -76,6 +76,10 @@ class DownloadManager:
         Args:
             comp: 可下载的 Enhanced 组件。
         """
+        if comp.path:
+            logger.debug(f"跳过下载: 已缓存, type={comp.type}, path={comp.path}")
+            return
+
         url = comp.url or ""
         if not url:
             logger.debug(f"跳过下载: url 为空, type={comp.type}")
@@ -84,7 +88,9 @@ class DownloadManager:
         try:
             temp_path, warning = await self._download(comp)
         except Exception as e:
-            logger.warning(f"下载失败: {e}, type={comp.type}, url={describe_media_ref(url)}")
+            logger.warning(
+                f"下载失败: {e}, type={comp.type}, url={describe_media_ref(url)}"
+            )
             comp.warn = "下载失败"
             return
 
@@ -184,10 +190,14 @@ class DownloadManager:
 
         if downloaded == 0:
             self._cleanup_temp(str(temp_path))
-            logger.warning(f"下载内容为空: type={comp.type}, url={describe_media_ref(url)}")
+            logger.warning(
+                f"下载内容为空: type={comp.type}, url={describe_media_ref(url)}"
+            )
             return None, "下载内容为空"
 
-        logger.debug(f"下载完成: type={comp.type}, size={downloaded}B, suffix={temp_path.suffix}")
+        logger.debug(
+            f"下载完成: type={comp.type}, size={downloaded}B, suffix={temp_path.suffix}"
+        )
         return str(temp_path.resolve()), None
 
     @staticmethod
@@ -219,7 +229,9 @@ class DownloadManager:
             return guessed
         suffix = DownloadManager._EXT_FALLBACK.get(file_type, "")
         if not suffix:
-            logger.warning(f"无法确定文件后缀: type={file_type}, content_type={content_type}")
+            logger.warning(
+                f"无法确定文件后缀: type={file_type}, content_type={content_type}"
+            )
         return suffix
 
     # ── 哈希 / 路径辅助 ──

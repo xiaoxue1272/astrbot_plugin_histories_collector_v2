@@ -37,6 +37,8 @@ class HistoriesCollectorConfig:
     max_file_size_mb: int
     max_nesting_depth: int
     collect_bot_message: bool
+    parse_types: list[str]
+    download_types: list[str]
 
     def __init__(self, config: dict[str, Any]):
         self.es_config = ESConfig(config.get("es_config", {}))
@@ -44,3 +46,7 @@ class HistoriesCollectorConfig:
         self.max_file_size_mb = config.get("max_file_size_mb", 50)
         self.max_nesting_depth = config.get("max_nesting_depth", 3)
         self.collect_bot_message = bool(config.get("collect_bot_message", False))
+        # 需要解析的消息组件类型，空表示全部解析
+        self.parse_types = list(config.get("parse_types") or [])
+        # 需要下载的媒体类型，空表示全部下载
+        self.download_types = list(config.get("download_types") or [])

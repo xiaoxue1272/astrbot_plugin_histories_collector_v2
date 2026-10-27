@@ -4,13 +4,11 @@
 覆写 get_sender() 提取昵称，覆写 _convert() 优先解析 OneBot segment。
 """
 
-import inspect
 import json
 import re
 import xml.etree.ElementTree as ET
 
 from astrbot.api import logger
-from astrbot.core.message.components import BaseMessageComponent
 from data.plugins.astrbot_plugin_histories_collector_v2.chain_iter import (
     MessageChainIter,
 )
@@ -40,15 +38,16 @@ from data.plugins.astrbot_plugin_histories_collector_v2.utils import async_retry
 class AiocqhttpPlatformHelper(PlatformHelper):
     """OneBot V11 (aiocqhttp) 平台辅助类。
 
-    覆写 get_chain() 使用 OneBot segment 数据增强，
+    覆写 _build_chain() 使用 OneBot segment 数据增强，
     覆写 get_sender() 提取昵称，
     覆写 _convert() 优先解析 OneBot segment，失败回退父类。
+    解析类型过滤由基类 get_chain() 统一处理。
     """
 
     # ── 消息链构建 ──
 
-    async def get_chain(self) -> list[EnhancedComponent]:
-        """使用 OneBot segment 数据增强构建 Enhanced 消息链。"""
+    async def _build_chain(self) -> list[EnhancedComponent]:
+        """使用 OneBot segment 数据增强构建原始 Enhanced 消息链。"""
         raw = self._event.message_obj.raw_message
         segments = getattr(raw, "message", []) if raw else []
         chain = self._event.get_messages()
@@ -62,85 +61,165 @@ class AiocqhttpPlatformHelper(PlatformHelper):
         logger.debug(f"消息链构建完成，共 {len(result)} 个组件")
         return result
 
-    async def _convert(
-        self,
-        component: BaseMessageComponent,
-        ctx: object = None,
-    ) -> EnhancedComponent | None:
-        """优先解析 OneBot segment，失败回退父类默认转换。"""
+    # ── 各类型组件转换（有 OneBot segment 数据时优先用它，否则回退父类） ──
+    #
+    # 每个类型只有一个方法：ctx 是 OneBot segment dict 时用段数据解析
+    # （嵌套展开路径会传 component=None），否则回退父类的框架组件转换。
+    # depth 仅 reply/forward/node 使用，由 _parse_onebot_segment 传入。
+
+    async def _convert_plain(self, component, ctx=None, depth=0):
         if isinstance(ctx, dict):
-            result = await self._parse_onebot_segment(ctx)
-            if result is not None:
-                return result
-            logger.debug(
-                f"OneBot segment 解析失败，回退默认转换: type={ctx.get('type', '?')}"
+            return EnhancedPlain(text=str(ctx.get("data", {}).get("text", "")))
+        return await super()._convert_plain(component, ctx)
+
+    async def _convert_image(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            try:
+                sub_type = int(data.get("sub_type") or 0)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"图片 sub_type 异常，按普通图片处理: {data.get('sub_type')!r}"
+                )
+                sub_type = 0
+            url = data.get("url", "")
+            name = data.get("file", "")
+            if sub_type != 0:
+                return EnhancedSticker(
+                    url=url, name=name, summary=data.get("summary") or None
+                )
+            return EnhancedImage(url=url, name=name)
+        return await super()._convert_image(component, ctx)
+
+    async def _convert_record(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            message_id = ctx.get("message_id") or self._event.message_obj.message_id
+            text = await self.fetch_record_text(message_id)
+            return EnhancedVoice(
+                url=data.get("url", ""), name=data.get("file", ""), text=text
             )
-        return await super()._convert(component, ctx)
+        return await super()._convert_record(component, ctx)
 
-    # ── 发送者 ──
+    async def _convert_video(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            return EnhancedVideo(url=data.get("url", ""), name=data.get("file", ""))
+        return await super()._convert_video(component, ctx)
 
-    async def get_sender(self) -> dict:
-        """从 OneBot raw 数据中提取发送者信息（含昵称）。
+    async def _convert_file(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            return EnhancedFile(name=data.get("file", ""), url=data.get("url", ""))
+        return await super()._convert_file(component, ctx)
 
-        OneBot sender 字段映射：
-          - user_id → ES sender.id
-          - nickname → ES sender.name（QQ 昵称，全局）
-          - card     → ES sender.nickname（群名片/群昵称，仅群聊）
-        """
-        raw = self._event.message_obj.raw_message
-        sender = getattr(raw, "sender", None) if raw else None
-        if isinstance(sender, dict):
-            return {
-                "id": sender.get("user_id", ""),
-                "name": sender.get("nickname", ""),
-                "nickname": sender.get("card", ""),
-            }
-        return await super().get_sender()
+    async def _convert_at(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            qq = str(data.get("qq", ""))
+            if qq == "all":
+                return EnhancedMentionAll()
 
-    # ── 转发消息解析 ──
+            # OneBot API 返回 dict，必须用 .get() 取值；getattr 对 dict 无效
+            name, nickname = "", ""
+            group_member = await self.get_group_member(qq)
+            if isinstance(group_member, dict):
+                name = str(group_member.get("nickname") or "")
+                nickname = str(group_member.get("card") or "")
+            else:
+                stranger = await self.get_stranger(qq)
+                if isinstance(stranger, dict):
+                    name = str(stranger.get("nickname") or "")
+            return EnhancedMention(id=qq, name=name, nickname=nickname)
+        return await super()._convert_at(component, ctx)
 
-    async def resolve_forward(
-        self, forward_id: str, depth: int = 0
-    ) -> list[EnhancedComponent] | None:
-        """通过 OneBot API get_forward_msg 展开转发消息。"""
-        call_action = self._event.bot.api.call_action
-        try:
-            forward_data = await async_retry(
-                lambda: call_action("get_forward_msg", id=forward_id),
+    async def _convert_reply(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            reply_id = ctx.get("data", {}).get("id", "")
+            if depth >= self._config.max_nesting_depth:
+                logger.debug(f"回复已达最大嵌套深度，截断: id={reply_id}")
+                return EnhancedReply(id=reply_id)
+            msg_data = await self.get_msg(reply_id)
+            if msg_data:
+                sender = msg_data.get("sender", {})
+                sub_msgs = msg_data.get("message", [])
+                reply_chain = await self._onebot_segments_to_chain(sub_msgs, depth + 1)
+                return EnhancedReply(
+                    id=reply_id,
+                    messages=reply_chain,
+                    sender_id=str(sender.get("user_id", "")),
+                    sender_name=sender.get("nickname", ""),
+                    sender_nickname=sender.get("card", ""),
+                    time=sender.get("timestamp"),
+                )
+            logger.warning(f"回复 {reply_id}: get_msg 失败，仅存 id")
+            return EnhancedReply(id=reply_id)
+        return await super()._convert_reply(component, ctx)
+
+    async def _convert_forward(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            forward_id = str(data.get("id", ""))
+            if depth >= self._config.max_nesting_depth:
+                logger.debug(f"转发消息已达最大嵌套深度，截断: id={forward_id}")
+                return EnhancedForward(id=forward_id)
+            content = data.get("content", [])
+            if not isinstance(content, list):
+                logger.warning(f"转发消息 {forward_id}: content 格式异常，改为接口展开")
+                content = []
+            summary = self._parse_forward_summary() if depth == 0 else None
+            if not content:
+                messages = await self.resolve_forward(forward_id, depth)
+                return EnhancedForward(
+                    id=forward_id, summary=summary, messages=messages
+                )
+            node_list: list[EnhancedComponent] = []
+            for node_data in content:
+                if not isinstance(node_data, dict):
+                    logger.warning(f"转发消息 {forward_id}: 存在非法节点，已跳过")
+                    continue
+                inner_chain = await self._onebot_segments_to_chain(
+                    node_data.get("message", []), depth + 1
+                )
+                sender = node_data.get("sender", {})
+                if not isinstance(sender, dict):
+                    sender = {}
+                node_list.append(
+                    EnhancedNode(
+                        sender_id=str(sender.get("user_id", "")),
+                        sender_name=sender.get("nickname", ""),
+                        messages=inner_chain,
+                    )
+                )
+            return EnhancedNodes(messages=node_list, summary=summary)
+        return await super()._convert_forward(component, ctx)
+
+    async def _convert_node(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            data = ctx.get("data", {})
+            inner_chain = await self._onebot_segments_to_chain(
+                data.get("content", []), depth + 1
             )
-        except Exception:
-            logger.warning(f"转发消息 {forward_id}: 获取失败")
-            return None
-        if not isinstance(forward_data, dict):
-            logger.warning(f"转发消息 {forward_id}: 响应格式异常")
-            return None
-
-        messages_data = forward_data.get("messages", [])
-        if not isinstance(messages_data, list) or not messages_data:
-            logger.warning(f"转发消息 {forward_id}: messages 格式异常或为空")
-            return None
-
-        logger.debug(f"转发消息 {forward_id} 已解析，共 {len(messages_data)} 条消息")
-        nodes: list[EnhancedComponent] = []
-        for msg in messages_data:
-            if not isinstance(msg, dict):
-                logger.warning(f"转发消息 {forward_id}: 存在非法消息节点，已跳过")
-                continue
-            sender = msg.get("sender", {})
-            if not isinstance(sender, dict):
-                sender = {}
-            segments = msg.get("message", [])
-            inner_chain = await self._onebot_segments_to_chain(segments, depth + 1)
-            node = EnhancedNode(
-                sender_id=str(sender.get("user_id", "")),
-                sender_name=sender.get("nickname", ""),
+            return EnhancedNode(
+                sender_id=str(data.get("uin", "")),
+                sender_name=data.get("name", ""),
                 messages=inner_chain,
             )
-            nodes.append(node)
+        return await super()._convert_node(component, ctx)
 
-        return nodes
+    async def _convert_json(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            return EnhancedJson(
+                data=json.dumps(ctx.get("data", {}), ensure_ascii=False)
+            )
+        return await super()._convert_json(component, ctx)
 
-    # ── OneBot segment 解析 ──
+    async def _convert_face(self, component, ctx=None, depth=0):
+        if isinstance(ctx, dict):
+            return EnhancedFace(id=str(ctx.get("data", {}).get("id", "")))
+        return await super()._convert_face(component, ctx)
+
+    # ── OneBot segment 解析（嵌套展开路径） ──
 
     async def _onebot_segments_to_chain(
         self,
@@ -169,169 +248,33 @@ class AiocqhttpPlatformHelper(PlatformHelper):
     async def _parse_onebot_segment(
         self, seg: dict, depth: int = 0
     ) -> EnhancedComponent | None:
-        """按类型分发 OneBot segment 到对应解析器。"""
-        seg_type = seg.get("type", "")
-        seg_data = seg.get("data", {})
-        if depth == 0:
-            message_id = self._event.message_obj.message_id
-        else:
-            message_id = seg.get("message_id", "")
-        handlers = {
-            "text": lambda: self._parse_text(seg_data),
-            "image": lambda: self._parse_image(seg_data),
-            "record": lambda: self._parse_record(seg_data, message_id),
-            "video": lambda: self._parse_video(seg_data),
-            "file": lambda: self._parse_file(seg_data),
-            "at": lambda: self._parse_at(seg_data),
-            "reply": lambda: self._parse_reply(seg_data, depth),
-            "forward": lambda: self._parse_forward(seg_data, depth),
-            "node": lambda: self._parse_node(seg_data, depth),
-            "json": lambda: self._parse_json(seg_data),
-            "face": lambda: self._parse_face(seg_data),
+        """按段类型分发到对应的组件转换方法（嵌套展开路径使用）。
+
+        Args:
+            seg: OneBot 消息段 dict。
+            depth: 当前嵌套深度。
+
+        Returns:
+            Enhanced 组件；不支持的段类型返回 None。
+        """
+        dispatch = {
+            "text": self._convert_plain,
+            "image": self._convert_image,
+            "record": self._convert_record,
+            "video": self._convert_video,
+            "file": self._convert_file,
+            "at": self._convert_at,
+            "reply": self._convert_reply,
+            "forward": self._convert_forward,
+            "node": self._convert_node,
+            "json": self._convert_json,
+            "face": self._convert_face,
         }
-
-        handler = handlers.get(seg_type)
-        if handler is None:
-            logger.warning(f"不支持的 OneBot segment 类型: {seg_type}")
+        converter = dispatch.get(seg.get("type", ""))
+        if converter is None:
+            logger.warning(f"不支持的 OneBot segment 类型: {seg.get('type', '')}")
             return None
-        result = handler()
-        return await result if inspect.isawaitable(result) else result
-
-    # ── OneBot segment 解析器 ──
-
-    @staticmethod
-    def _parse_text(data: dict) -> EnhancedPlain:
-        return EnhancedPlain(text=str(data.get("text", "")))
-
-    async def _parse_image(self, data: dict) -> EnhancedImage | EnhancedSticker:
-        try:
-            sub_type = int(data.get("sub_type") or 0)
-        except (TypeError, ValueError):
-            logger.warning(
-                f"图片 sub_type 异常，按普通图片处理: {data.get('sub_type')!r}"
-            )
-            sub_type = 0
-        url = data.get("url", "")
-        name = data.get("file", "")
-        summary = data.get("summary") or None
-        if sub_type != 0:
-            comp: EnhancedSticker = EnhancedSticker(url=url, name=name, summary=summary)
-        else:
-            comp = EnhancedImage(url=url, name=name)
-        await self._download_manager.download_and_cache(comp)
-        return comp
-
-    async def _parse_record(self, data: dict, message_id: str) -> EnhancedVoice:
-        if not message_id:
-            message_id = self._event.message_obj.message_id
-        text = await self.fetch_record_text(message_id)
-        comp = EnhancedVoice(
-            url=data.get("url", ""), name=data.get("file", ""), text=text
-        )
-        await self._download_manager.download_and_cache(comp)
-        return comp
-
-    async def _parse_video(self, data: dict) -> EnhancedVideo:
-        comp = EnhancedVideo(url=data.get("url", ""), name=data.get("file", ""))
-        await self._download_manager.download_and_cache(comp)
-        return comp
-
-    async def _parse_file(self, data: dict) -> EnhancedFile:
-        comp = EnhancedFile(name=data.get("file", ""), url=data.get("url", ""))
-        await self._download_manager.download_and_cache(comp)
-        return comp
-
-    async def _parse_at(self, data: dict) -> EnhancedMention | EnhancedMentionAll:
-        qq = str(data.get("qq", ""))
-        if qq == "all":
-            return EnhancedMentionAll()
-
-        # OneBot API 返回 dict，必须用 .get() 取值；getattr 对 dict 无效
-        name, nickname = "", ""
-        group_member = await self.get_group_member(qq)
-        if isinstance(group_member, dict):
-            name = str(group_member.get("nickname") or "")
-            nickname = str(group_member.get("card") or "")
-        else:
-            stranger = await self.get_stranger(qq)
-            if isinstance(stranger, dict):
-                name = str(stranger.get("nickname") or "")
-        return EnhancedMention(id=qq, name=name, nickname=nickname)
-
-    async def _parse_reply(self, data: dict, depth: int = 0) -> EnhancedReply:
-        reply_id = data.get("id", "")
-        if depth >= self._config.max_nesting_depth:
-            logger.debug(f"回复已达最大嵌套深度，截断: id={reply_id}")
-            return EnhancedReply(id=reply_id)
-        msg_data = await self.get_msg(reply_id)
-        if msg_data:
-            sender = msg_data.get("sender", {})
-            sub_msgs = msg_data.get("message", [])
-            reply_chain = await self._onebot_segments_to_chain(sub_msgs, depth + 1)
-            return EnhancedReply(
-                id=reply_id,
-                messages=reply_chain,
-                sender_id=str(sender.get("user_id", "")),
-                sender_name=sender.get("nickname", ""),
-                sender_nickname=sender.get("card", ""),
-                time=sender.get("timestamp"),
-            )
-        logger.warning(f"回复 {reply_id}: get_msg 失败，仅存 id")
-        return EnhancedReply(id=reply_id)
-
-    async def _parse_forward(
-        self, data: dict, depth: int = 0
-    ) -> EnhancedForward | EnhancedNodes:
-        forward_id = str(data.get("id", ""))
-        if depth >= self._config.max_nesting_depth:
-            logger.debug(f"转发消息已达最大嵌套深度，截断: id={forward_id}")
-            return EnhancedForward(id=forward_id)
-        content = data.get("content", [])
-        if not isinstance(content, list):
-            logger.warning(f"转发消息 {forward_id}: content 格式异常，改为接口展开")
-            content = []
-        summary = self._parse_forward_summary() if depth == 0 else None
-        if not content:
-            messages = await self.resolve_forward(forward_id, depth)
-            return EnhancedForward(id=forward_id, summary=summary, messages=messages)
-        node_list: list[EnhancedComponent] = []
-        for node_data in content:
-            if not isinstance(node_data, dict):
-                logger.warning(f"转发消息 {forward_id}: 存在非法节点，已跳过")
-                continue
-            inner_segments = node_data.get("message", [])
-            inner_chain = await self._onebot_segments_to_chain(
-                inner_segments, depth + 1
-            )
-            sender = node_data.get("sender", {})
-            if not isinstance(sender, dict):
-                sender = {}
-            node_list.append(
-                EnhancedNode(
-                    sender_id=str(sender.get("user_id", "")),
-                    sender_name=sender.get("nickname", ""),
-                    messages=inner_chain,
-                )
-            )
-        return EnhancedNodes(messages=node_list, summary=summary)
-
-    async def _parse_node(self, data: dict, depth: int = 0) -> EnhancedNode:
-        inner_chain = await self._onebot_segments_to_chain(
-            data.get("content", []), depth + 1
-        )
-        return EnhancedNode(
-            sender_id=str(data.get("uin", "")),
-            sender_name=data.get("name", ""),
-            messages=inner_chain,
-        )
-
-    @staticmethod
-    def _parse_json(data: dict) -> EnhancedJson:
-        return EnhancedJson(data=json.dumps(data, ensure_ascii=False))
-
-    @staticmethod
-    def _parse_face(data: dict) -> EnhancedFace:
-        return EnhancedFace(id=str(data.get("id", "")))
+        return await converter(None, seg, depth)
 
     # ── 转发消息 XML 预览摘要 ──
 

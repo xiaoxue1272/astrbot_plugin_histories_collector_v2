@@ -42,6 +42,8 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
 | `max_file_size_mb` | 下载文件大小上限(MB) | `50` |
 | `max_nesting_depth` | 合并消息最大嵌套层数 | `3` |
 | `collect_bot_message` | 收集机器人自己发送的群消息（`sender.id` 为机器人账号，`message_id` 为空） | `false` |
+| `parse_types` | 需要解析的消息组件类型（`text`/`image`/`sticker`/`mention`/`mention_all`/`reply`/`voice`/`video`/`file`/`face`/`json`/`share`/`music`/`forward`/`nodes`/`node`），留空表示全部解析 | `[]` |
+| `download_types` | 需要下载的媒体类型（`image`/`sticker`/`video`/`voice`/`file`），留空表示全部下载 | `[]` |
 
 ### 群组过滤说明
 

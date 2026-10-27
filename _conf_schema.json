@@ -75,6 +75,18 @@
     "hint": "开启后，机器人在群聊中发出的消息也会写入 ES：sender.id 为机器人账号，message_id 为空字符串。媒体文件按正常流程同步下载，发送后会略有延迟。默认关闭。",
     "default": false
   },
+  "parse_types": {
+    "description": "需要解析的消息组件类型",
+    "type": "list",
+    "hint": "留空表示解析全部类型。可选值：text / image / sticker / mention / mention_all / reply / voice / video / file / face / json / share / music / forward / nodes / node。未列出的类型会被丢弃，不写入 messages。",
+    "default": []
+  },
+  "download_types": {
+    "description": "需要下载的媒体类型",
+    "type": "list",
+    "hint": "留空表示全部下载。可选值：image / sticker / video / voice / file。未列出的类型不下载，但仍在 messages 中保留 url、name 等元数据。",
+    "default": []
+  },
   "es_config": {
     "description": "Elasticsearch 配置",
     "type": "object",
