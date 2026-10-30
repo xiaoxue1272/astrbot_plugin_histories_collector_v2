@@ -37,6 +37,7 @@ pip install elasticsearch[async]==8.19.3 snowflake-id==1.0.2 aiohttp>=3.9.0
 | `es_config.password` | ES 密码 | — |
 | `es_config.alias` | 索引别名 | `message-histories-v2` |
 | `es_config.use_ik_analyzer` | 开启 IK 分词（ES 必须安装 analysis-ik，否则插件无法启动） | `true` |
+| `es_config.number_of_replicas` | 索引副本数，单节点 ES 请设为 0，否则索引一直 yellow | `0` |
 | `group_filter.mode` | 过滤模式：whitelist / blacklist | `whitelist` |
 | `group_filter.platforms` | 按平台配置群组 ID | `[]` |
 | `max_file_size_mb` | 下载文件大小上限(MB) | `50` |

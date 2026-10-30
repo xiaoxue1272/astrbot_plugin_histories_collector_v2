@@ -12,6 +12,10 @@ parameters）与实现在同一个类里，通过 ``Context.add_llm_tools()``
 - 工具类独立于 Star 子类，可单独构造和单测；
 - ``handler_module_path``、激活/停用状态、卸载清理均由框架
   （``add_llm_tools`` + star_manager 绑定循环）自动管理。
+
+ES 查询 DSL 可执行 Painless 脚本，恶意 body 具备风险，后续需要在不牺牲
+查询灵活性的前提下重新设计拦截方案。当前仅保留"群聊自动限定当前群"
+这一条结构性约束。
 """
 
 import json
@@ -29,9 +33,7 @@ TOOL_NAME = "search_es"
 TOOL_DESCRIPTION = (
     "查询群聊历史消息记录。body 为 ES 原生搜索 body，可按需包含 "
     "query/sort/aggs/size/from/_source 等字段。"
-    "权限与限制：群聊中自动限定当前群，所有成员可用；私聊仅管理员可用"
-    "（可跨群查询，用于全量分析）；非管理员的 size 上限 50、"
-    "from + size 上限 10000，且禁用 script 类参数；管理员不受限。"
+    "群聊场景会自动限定在当前群内查询，私聊可跨群检索。"
 )
 
 # 标准 JSON Schema：LLM 看到的参数说明书
@@ -48,12 +50,6 @@ TOOL_PARAMETERS = {
     },
     "required": ["body"],
 }
-
-# 非管理员的查询上限：结果条数与 ES 分页窗口
-MAX_SEARCH_SIZE = 50
-MAX_RESULT_WINDOW = 10000
-# 非管理员禁用的高开销/脚本类参数
-FORBIDDEN_BODY_KEYS = ("script", "script_fields", "runtime_mappings")
 
 
 def inject_group_filter(body: dict, event: AstrMessageEvent) -> None:
@@ -136,31 +132,7 @@ class SearchEsTool(FunctionTool[AstrAgentContext]):
                 {"error": "body 必须是 ES 请求体对象"}, ensure_ascii=False
             )
 
-        if not event.is_admin():
-            for key in FORBIDDEN_BODY_KEYS:
-                if key in body:
-                    return json.dumps(
-                        {"error": f"非管理员不支持 {key} 参数"}, ensure_ascii=False
-                    )
-            try:
-                size = int(body.get("size", 20))
-            except (TypeError, ValueError):
-                size = 20
-            size = min(max(size, 1), MAX_SEARCH_SIZE)
-            body["size"] = size
-            try:
-                offset = int(body.get("from", 0))
-            except (TypeError, ValueError):
-                offset = 0
-            offset = max(offset, 0)
-            if offset + size > MAX_RESULT_WINDOW:
-                return json.dumps(
-                    {"error": f"from + size 不能超过 {MAX_RESULT_WINDOW}"},
-                    ensure_ascii=False,
-                )
-            body["from"] = offset
-
-        # 群聊场景自动限定当前群；管理员私聊不限定，可跨群分析
+        # 群聊场景自动限定当前群；私聊不限定，可跨群分析
         if not event.is_private_chat():
             inject_group_filter(body, event)
 

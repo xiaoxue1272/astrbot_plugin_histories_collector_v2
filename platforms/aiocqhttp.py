@@ -169,6 +169,7 @@ class AiocqhttpPlatformHelper(PlatformHelper):
                 content = []
             summary = self._parse_forward_summary() if depth == 0 else None
             if not content:
+                # content 为空或格式异常：改用 get_forward_msg 接口展开
                 messages = await self.resolve_forward(forward_id, depth)
                 return EnhancedForward(
                     id=forward_id, summary=summary, messages=messages
@@ -193,6 +194,47 @@ class AiocqhttpPlatformHelper(PlatformHelper):
                 )
             return EnhancedNodes(messages=node_list, summary=summary)
         return await super()._convert_forward(component, ctx)
+
+    async def resolve_forward(
+        self, forward_id: str, depth: int = 0
+    ) -> list[EnhancedComponent] | None:
+        """通过 OneBot API get_forward_msg 展开转发消息。"""
+        call_action = self._event.bot.api.call_action
+        try:
+            forward_data = await async_retry(
+                lambda: call_action("get_forward_msg", id=forward_id),
+            )
+        except Exception:
+            logger.warning(f"转发消息 {forward_id}: 获取失败")
+            return None
+        if not isinstance(forward_data, dict):
+            logger.warning(f"转发消息 {forward_id}: 响应格式异常")
+            return None
+
+        messages_data = forward_data.get("messages", [])
+        if not isinstance(messages_data, list) or not messages_data:
+            logger.warning(f"转发消息 {forward_id}: messages 格式异常或为空")
+            return None
+
+        logger.debug(f"转发消息 {forward_id} 已解析，共 {len(messages_data)} 条消息")
+        nodes: list[EnhancedComponent] = []
+        for msg in messages_data:
+            if not isinstance(msg, dict):
+                logger.warning(f"转发消息 {forward_id}: 存在非法消息节点，已跳过")
+                continue
+            sender = msg.get("sender", {})
+            if not isinstance(sender, dict):
+                sender = {}
+            segments = msg.get("message", [])
+            inner_chain = await self._onebot_segments_to_chain(segments, depth + 1)
+            node = EnhancedNode(
+                sender_id=str(sender.get("user_id", "")),
+                sender_name=sender.get("nickname", ""),
+                messages=inner_chain,
+            )
+            nodes.append(node)
+
+        return nodes
 
     async def _convert_node(self, component, ctx=None, depth=0):
         if isinstance(ctx, dict):

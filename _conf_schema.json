@@ -6,7 +6,7 @@
       "mode": {
         "description": "过滤模式",
         "type": "string",
-        "hint": "whitelist: 仅收集列表中群组; blacklist: 排除列表中群组。默认 whitelist 且群组列表为空时不会收集任何消息，请先配置需要收集的群组 ID。",
+        "hint": "whitelist: 仅收集列表中群组; blacklist: 排除列表中群组。默认 whitelist 且群组列表为空时不会收集任何消息，请先配置需要收集的群组 ID，或改为 blacklist 收集全部群。",
         "options": ["whitelist", "blacklist"],
         "default": "whitelist"
       },
@@ -121,6 +121,12 @@
         "type": "bool",
         "hint": "开启后 ES 必须安装 analysis-ik 分词插件，否则插件无法启动、无法收集消息；非中文环境可关闭",
         "default": true
+      },
+      "number_of_replicas": {
+        "description": "索引副本数",
+        "type": "int",
+        "hint": "单节点 ES 部署请设为 0，否则索引会一直处于 yellow 状态",
+        "default": 0
       }
     }
   }

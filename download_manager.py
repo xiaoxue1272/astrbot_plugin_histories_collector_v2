@@ -18,6 +18,7 @@ from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
 from data.plugins.astrbot_plugin_histories_collector_v2.utils import (
     format_bytes_to_mb,
     get_plugin_data_dir,
+    is_http_url,
 )
 
 
@@ -54,7 +55,8 @@ class DownloadManager:
         self._store_dir = get_plugin_data_dir()
         self._store_dir.mkdir(parents=True, exist_ok=True)
         self._http_session: aiohttp.ClientSession = aiohttp.ClientSession()
-        self._http_session_lock = asyncio.Lock()
+        # 缓存写入锁：保证同一内容并发落盘时只有一次拷贝，且不会读到半成品
+        self._cache_lock = asyncio.Lock()
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -140,6 +142,13 @@ class DownloadManager:
         url = comp.url or ""
         if not url:
             return None, "下载失败"
+        # 只允许常规 Web 协议，避免 file:// / ftp:// 等本地或异常协议
+        if not is_http_url(url):
+            logger.warning(
+                f"跳过非 HTTP(S) 媒体链接: type={comp.type}, "
+                f"url={describe_media_ref(url)}"
+            )
+            return None, "不支持的链接协议"
 
         temp_dir = Path(get_astrbot_temp_path())
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -150,12 +159,14 @@ class DownloadManager:
                 raise RuntimeError(f"下载返回错误状态码: {resp.status}")
 
             content_type = resp.headers.get("Content-Type")
-            content_length = resp.headers.get("Content-Length")
-            if content_length and int(content_length) > max_bytes:
+            content_length = self._parse_content_length(
+                resp.headers.get("Content-Length")
+            )
+            if content_length and content_length > max_bytes:
                 logger.debug(f"文件超出大小限制，跳过: {describe_media_ref(url)}")
                 return None, (
                     f"文件超出 {self._max_file_size_mb}MB 限制 "
-                    f"({format_bytes_to_mb(int(content_length))})"
+                    f"({format_bytes_to_mb(content_length)})"
                 )
 
             # 响应头带文件名时回填 name，用于推断后缀并记录到 ES
@@ -199,6 +210,25 @@ class DownloadManager:
             f"下载完成: type={comp.type}, size={downloaded}B, suffix={temp_path.suffix}"
         )
         return str(temp_path.resolve()), None
+
+    @staticmethod
+    def _parse_content_length(raw: str | None) -> int | None:
+        """解析 Content-Length 响应头，非数字或负数时返回 None。
+
+        Args:
+            raw: 原始响应头值，可能为 None 或被代理改写成非法值。
+
+        Returns:
+            解析后的字节数；无法解析时返回 None（视为未知长度）。
+        """
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.debug(f"Content-Length 非法，按未知长度处理: {raw!r}")
+            return None
+        return value if value >= 0 else None
 
     @staticmethod
     def _pick_suffix(file_type: str, content_type: str | None, name: str = "") -> str:
@@ -275,7 +305,15 @@ class DownloadManager:
         """缓存本地文件到存储目录，返回 (相对路径, 警告信息)。
 
         所有类型统一以 ``{内容 hash 前 16 位}{后缀}`` 命名：
-        内容相同天然去重，内容不同不会互相覆盖。
+        内容相同天然去重，内容不同不会互相覆盖。并发写入同一哈希时，
+        先写临时文件再原子替换，避免读到写了一半的缓存文件。
+
+        Args:
+            temp_path: 下载得到的临时文件绝对路径。
+            file_type: 组件类型，决定存储子目录。
+
+        Returns:
+            (相对存储根目录的 posix 路径, 警告信息)。
         """
         if not temp_path:
             return None, "下载失败"
@@ -296,7 +334,17 @@ class DownloadManager:
                 self._cleanup_temp(temp_path)
                 return dest.relative_to(self._store_dir).as_posix(), None
 
-        shutil.copy(temp_path, dest)
+        with self._cache_lock:
+            # 加锁后二次检查：另一个协程可能刚刚写入了同一内容
+            if not dest.exists():
+                staging = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.part")
+                try:
+                    shutil.copy(temp_path, staging)
+                    # 同目录下的 os.replace 是原子操作，读者只可能看到完整文件
+                    staging.replace(dest)
+                finally:
+                    staging.unlink(missing_ok=True)
+
         self._cleanup_temp(temp_path)
         return dest.relative_to(self._store_dir).as_posix(), None
 

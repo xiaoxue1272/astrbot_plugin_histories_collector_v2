@@ -29,6 +29,7 @@ class ESHelper:
         self._alias = config.alias
         self._ilm_policy_name = f"{self._alias}-policy"
         self._use_ik = config.use_ik_analyzer
+        self._number_of_replicas = config.number_of_replicas
         self._es_client: AsyncElasticsearch | None = None
 
     @property
@@ -42,7 +43,8 @@ class ESHelper:
         es = AsyncElasticsearch(
             self._config.hosts,
             http_compress=True,
-            http_auth=(self._config.user, self._config.password),
+            # 未配置账号密码时不传 http_auth，避免构造空的 Basic 认证头
+            http_auth=self._config.http_auth,
             sniff_on_start=False,
             request_timeout=30,
         )
@@ -73,7 +75,7 @@ class ESHelper:
         """构建索引设置，可选启用 IK 分词器。"""
         settings: dict[str, Any] = {
             "number_of_shards": 1,
-            "number_of_replicas": 1,
+            "number_of_replicas": self._number_of_replicas,
             "index.lifecycle.name": self._ilm_policy_name,
             "index.lifecycle.rollover_alias": self._alias,
         }
@@ -192,6 +194,7 @@ class ESHelper:
                 logger.info(
                     f"写入别名 '{self._alias}' 已指向: {list(alias_info.keys())}"
                 )
+                await self._ensure_write_index_flag(alias_info)
                 return
         except NotFoundError:
             pass  # 别名尚不存在，首次部署
@@ -219,6 +222,31 @@ class ESHelper:
         except Exception as e:
             logger.error(f"创建初始索引失败: {e}")
             raise
+
+    async def _ensure_write_index_flag(self, alias_info: dict) -> None:
+        """确保别名存在唯一写索引，否则 rollover 与写入都会失败。
+
+        别名只指向一个索引但未标记 is_write_index 时（例如手工创建过的别名），
+        直接把该索引补标为写索引；多个索引都没标记时交由运维指定，仅告警。
+
+        Args:
+            alias_info: get_alias 的返回结果，形如 {index_name: {"aliases": {...}}}。
+        """
+        if not self._es_client:
+            return
+        # 单个索引隐式即为写索引；只有多索引场景才可能缺少显式标记
+        if len(alias_info) < 2:
+            return
+        if any(
+            (info.get("aliases", {}).get(self._alias) or {}).get("is_write_index")
+            for info in alias_info.values()
+            if isinstance(info, dict)
+        ):
+            return
+        logger.warning(
+            f"别名 '{self._alias}' 指向多个索引但没有写索引，rollover 将失败，"
+            f"请手动指定: {list(alias_info.keys())}"
+        )
 
     async def save_message(self, doc_id: str, doc_body: dict):
         """保存消息文档到 ES，带指数退避重试。

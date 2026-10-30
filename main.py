@@ -84,32 +84,34 @@ class HistoriesCollectorV2Plugin(Star):
     async def on_group_message(self, event: AstrMessageEvent):
         """处理全平台群消息。
 
+        收集器属于旁路功能，任何异常都不得冒泡到 AstrBot 的消息管道，
+        否则会被包装成错误提示回复给用户，因此整体兜底。
+
         Args:
             event: 跨平台消息事件（仅依赖基类 API，无平台子类依赖）。
         """
-        if not self.es_helper or not self.es_helper.is_connected:
-            return
-
-        platform_name = event.get_platform_name()
-        group_id = event.get_group_id()
-
-        if not self.group_filter.should_collect(platform_name, group_id):
-            return
-
-        doc = await self._build_document(event)
-        if doc is None:
-            return
-
-        # 文档 ID 使用 Snowflake，每次收集生成唯一 ID。
-        # 注意：同一条消息被多个平台实例收到或重放时会写入多条文档，
-        # 去重依赖 _source 中的 message_id + platform_id + group.id 组合查询。
-        doc_id = str(next(self.id_generator))
-
         try:
+            if not self.es_helper or not self.es_helper.is_connected:
+                return
+
+            platform_name = event.get_platform_name()
+            group_id = event.get_group_id()
+
+            if not self.group_filter.should_collect(platform_name, group_id):
+                return
+
+            doc = await self._build_document(event)
+            if doc is None:
+                return
+
+            # 文档 ID 使用 Snowflake，每次收集生成唯一 ID。
+            # 注意：同一条消息被多个平台实例收到或重放时会写入多条文档，
+            # 去重依赖 _source 中的 message_id + platform_id + group.id 组合查询。
+            doc_id = str(next(self.id_generator))
             await self.es_helper.save_message(doc_id, doc)
         except Exception as e:
             logger.error(
-                f"ES 保存消息失败，消息已丢弃: message_id={event.message_obj.message_id}, {e}"
+                f"收集群消息失败，已跳过: message_id={event.message_obj.message_id}, {e}"
             )
 
     @filter.after_message_sent()
@@ -122,6 +124,17 @@ class HistoriesCollectorV2Plugin(Star):
 
         Args:
             event: 当前消息事件（回复阶段的事件，结果尚未被清空）。
+        """
+        try:
+            await self._collect_bot_message(event)
+        except Exception as e:
+            logger.error(f"收集机器人消息失败，已跳过: {e}")
+
+    async def _collect_bot_message(self, event: AstrMessageEvent) -> None:
+        """机器人消息收集的实际实现，异常由调用方统一兜底。
+
+        Args:
+            event: 发送完成阶段的消息事件。
         """
         if not self.config.collect_bot_message:
             return
@@ -145,15 +158,8 @@ class HistoriesCollectorV2Plugin(Star):
         helper = create_platform_helper(
             event, self.collector_config, self.download_manager
         )
-        enhanced = []
-        for comp in chain:
-            converted = await helper._convert(comp)
-            if converted is not None:
-                enhanced.append(converted)
-        if not enhanced:
-            return
-        # 与平台消息链一致：类型过滤 + 媒体下载
-        enhanced = await helper.filter_and_download(enhanced)
+        # 机器人消息没有原始 OneBot segment，get_chain 会走父类 _build_chain
+        enhanced = await helper.get_chain()
         if not enhanced:
             return
 
@@ -170,11 +176,7 @@ class HistoriesCollectorV2Plugin(Star):
             "types": list(dict.fromkeys(comp.type for comp in enhanced)),
             "messages": [comp.to_dict() for comp in enhanced],
         }
-
-        try:
-            await self.es_helper.save_message(str(next(self.id_generator)), doc)
-        except Exception as e:
-            logger.error(f"ES 保存机器人消息失败: {e}")
+        await self.es_helper.save_message(str(next(self.id_generator)), doc)
 
     async def _build_document(self, event: AstrMessageEvent) -> dict | None:
         """Build ES document.
