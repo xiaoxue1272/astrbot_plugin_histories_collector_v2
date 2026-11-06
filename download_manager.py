@@ -120,7 +120,7 @@ class DownloadManager:
                 self._cleanup_temp(temp_path)
             temp_path = resolved_path
 
-        cached_path, warning = self._cache(temp_path, comp.type)
+        cached_path, warning = await self._cache(temp_path, comp.type)
         if cached_path:
             comp.path = cached_path
             logger.debug(f"文件已缓存: type={comp.type}, path={cached_path}")
@@ -297,7 +297,7 @@ class DownloadManager:
 
         return sub_dir / f"{content_hash[:16]}{extension}"
 
-    def _cache(
+    async def _cache(
         self,
         temp_path: str,
         file_type: str,
@@ -307,6 +307,9 @@ class DownloadManager:
         所有类型统一以 ``{内容 hash 前 16 位}{后缀}`` 命名：
         内容相同天然去重，内容不同不会互相覆盖。并发写入同一哈希时，
         先写临时文件再原子替换，避免读到写了一半的缓存文件。
+
+        注意：``_cache_lock`` 是 ``asyncio.Lock``，只能用 ``async with``
+        获取，因此本方法必须是协程。
 
         Args:
             temp_path: 下载得到的临时文件绝对路径。
@@ -334,7 +337,7 @@ class DownloadManager:
                 self._cleanup_temp(temp_path)
                 return dest.relative_to(self._store_dir).as_posix(), None
 
-        with self._cache_lock:
+        async with self._cache_lock:
             # 加锁后二次检查：另一个协程可能刚刚写入了同一内容
             if not dest.exists():
                 staging = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.part")
