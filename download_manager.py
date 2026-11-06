@@ -10,7 +10,11 @@ import aiohttp
 
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-from astrbot.core.utils.media_utils import MediaResolver, describe_media_ref
+from astrbot.core.utils.media_utils import (
+    MediaResolver,
+    describe_media_ref,
+    file_uri_to_path,
+)
 from data.plugins.astrbot_plugin_histories_collector_v2.enhanced import (
     EnhancedFile,
     EnhancedMedia,
@@ -87,43 +91,57 @@ class DownloadManager:
             logger.debug(f"跳过下载: url 为空, type={comp.type}")
             return
 
-        try:
-            temp_path, warning = await self._download(comp)
-        except Exception as e:
-            logger.warning(
-                f"下载失败: {e}, type={comp.type}, url={describe_media_ref(url)}"
-            )
-            comp.warn = "下载失败"
-            return
+        # 平台下发的媒体引用分两类：HTTP(S) 链接需要下载；本地路径与
+        # file:// URI（Telegram、企业微信等）本身就是文件，直接入库。
+        if is_http_url(url):
+            try:
+                src_path, warning = await self._download(comp)
+            except Exception as e:
+                logger.warning(
+                    f"下载失败: {e}, type={comp.type}, url={describe_media_ref(url)}"
+                )
+                comp.warn = "下载失败"
+                return
+            if warning:
+                comp.warn = warning
+                return
+            if not src_path:
+                comp.warn = "下载失败"
+                return
+            logger.debug(f"下载完成: type={comp.type}, path={src_path}")
+        else:
+            src_path = file_uri_to_path(url) if url.startswith("file://") else url
+            if not Path(src_path).is_file():
+                logger.warning(
+                    f"本地媒体不存在: type={comp.type}, url={describe_media_ref(url)}"
+                )
+                comp.warn = "下载失败"
+                return
+            logger.debug(f"使用本地媒体: type={comp.type}, path={src_path}")
 
-        if warning:
-            comp.warn = warning
-            return
-        if not temp_path:
-            comp.warn = "下载失败"
-            return
-
-        # 媒体类型：拿下载后的本地路径继续走 MediaResolver（音频转码等）
+        # 媒体类型：拿本地路径继续走 MediaResolver（音频转码等）
         if isinstance(comp, EnhancedMedia):
             try:
-                resolved_path = await MediaResolver(
-                    temp_path,
+                src_path = await MediaResolver(
+                    src_path,
                     media_type=comp.media_type,
                 ).to_path()
             except Exception as e:
-                logger.warning(f"媒体处理失败: {e}, type={comp.type}, path={temp_path}")
-                self._cleanup_temp(temp_path)
+                logger.warning(f"媒体处理失败: {e}, type={comp.type}, path={src_path}")
                 comp.warn = "媒体处理失败"
                 return
-            if resolved_path != temp_path:
-                # 转码产生了新文件，清理中间文件
-                self._cleanup_temp(temp_path)
-            temp_path = resolved_path
 
-        cached_path, warning = await self._cache(temp_path, comp.type)
-        if cached_path:
-            comp.path = cached_path
-            logger.debug(f"文件已缓存: type={comp.type}, path={cached_path}")
+        # 入库与清理解耦：_cache 只复制，不删除任何来源文件
+        cached_path, warning = await self._cache(src_path, comp.type)
+        if not cached_path:
+            comp.warn = warning or "缓存失败"
+            logger.warning(
+                f"缓存失败: type={comp.type}, url={describe_media_ref(url)}, "
+                f"reason={comp.warn}"
+            )
+            return
+        comp.path = cached_path
+        logger.debug(f"文件已缓存: type={comp.type}, path={cached_path}")
         if warning:
             comp.warn = warning
 
@@ -142,14 +160,6 @@ class DownloadManager:
         url = comp.url or ""
         if not url:
             return None, "下载失败"
-        # 只允许常规 Web 协议，避免 file:// / ftp:// 等本地或异常协议
-        if not is_http_url(url):
-            logger.warning(
-                f"跳过非 HTTP(S) 媒体链接: type={comp.type}, "
-                f"url={describe_media_ref(url)}"
-            )
-            return None, "不支持的链接协议"
-
         temp_dir = Path(get_astrbot_temp_path())
         temp_dir.mkdir(parents=True, exist_ok=True)
         max_bytes = self.max_file_size_bytes
@@ -192,15 +202,12 @@ class DownloadManager:
                             break
                         f.write(chunk)
             except Exception:
-                self._cleanup_temp(str(temp_path))
                 raise
 
         if over_limit:
-            self._cleanup_temp(str(temp_path))
             return None, f"文件超出 {self._max_file_size_mb}MB 限制"
 
         if downloaded == 0:
-            self._cleanup_temp(str(temp_path))
             logger.warning(
                 f"下载内容为空: type={comp.type}, url={describe_media_ref(url)}"
             )
@@ -299,7 +306,7 @@ class DownloadManager:
 
     async def _cache(
         self,
-        temp_path: str,
+        src_path: str,
         file_type: str,
     ) -> tuple[str | None, str | None]:
         """缓存本地文件到存储目录，返回 (相对路径, 警告信息)。
@@ -311,30 +318,32 @@ class DownloadManager:
         注意：``_cache_lock`` 是 ``asyncio.Lock``，只能用 ``async with``
         获取，因此本方法必须是协程。
 
+        本方法只把内容复制进存储目录，**不删除传入的文件**。来源既可能是下载
+        得到的文件，也可能是平台下发的原始媒体文件；后者属于平台，删除会影响
+        其他插件，因此本插件在任何分支下都不删除来源文件。
+
         Args:
-            temp_path: 下载得到的临时文件绝对路径。
+            src_path: 待入库文件路径，可以是下载产物或平台本地文件。
             file_type: 组件类型，决定存储子目录。
 
         Returns:
             (相对存储根目录的 posix 路径, 警告信息)。
         """
-        if not temp_path:
+        if not src_path:
             return None, "下载失败"
 
-        md5_hash = self._compute_hash(temp_path, "md5")
-        extension = self._extract_extension(temp_path, file_type)
+        md5_hash = self._compute_hash(src_path, "md5")
+        extension = self._extract_extension(src_path, file_type)
         dest = self._build_store_path(file_type, md5_hash, extension)
 
         if dest.exists():
-            new_sha256 = self._compute_hash(temp_path, "sha256")
+            new_sha256 = self._compute_hash(src_path, "sha256")
             existing_sha256 = self._compute_hash(str(dest), "sha256")
             if new_sha256 == existing_sha256:
-                self._cleanup_temp(temp_path)
                 return dest.relative_to(self._store_dir).as_posix(), None
-            logger.info(f"MD5 碰撞: {temp_path}，改用 SHA-256 命名")
+            logger.info(f"MD5 碰撞: {src_path}，改用 SHA-256 命名")
             dest = self._build_store_path(file_type, new_sha256, extension)
             if dest.exists():
-                self._cleanup_temp(temp_path)
                 return dest.relative_to(self._store_dir).as_posix(), None
 
         async with self._cache_lock:
@@ -342,19 +351,11 @@ class DownloadManager:
             if not dest.exists():
                 staging = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.part")
                 try:
-                    shutil.copy(temp_path, staging)
+                    shutil.copy(src_path, staging)
                     # 同目录下的 os.replace 是原子操作，读者只可能看到完整文件
                     staging.replace(dest)
                 finally:
                     staging.unlink(missing_ok=True)
 
-        self._cleanup_temp(temp_path)
         return dest.relative_to(self._store_dir).as_posix(), None
 
-    @staticmethod
-    def _cleanup_temp(temp_path: str) -> None:
-        """删除临时文件。"""
-        try:
-            Path(temp_path).unlink(missing_ok=True)
-        except OSError:
-            pass
